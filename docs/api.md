@@ -53,7 +53,7 @@ Base path `/api/v1`. JSON in and out. Authenticate with the session cookie (brow
 | POST | `/lists/{id}/low` | add every low pantry item |
 | POST | `/lists/{id}/checkout` | `{amount?, currency?, date?, store?, notes?, restock?=true, split?, paid_by?, category?, remove?=true}` → pantry restock, Pocket Split expense, purchase record |
 | GET | `/lists/suggest?q=` | item names used before |
-| GET | `/purchases` | checkouts |
+| GET | `/purchases` · DELETE `/purchases/{id}` | checkouts (deleting one leaves the pantry and Split untouched) |
 
 ## Pantry
 | Method | Path | Notes |

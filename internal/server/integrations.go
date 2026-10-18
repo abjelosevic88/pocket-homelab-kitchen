@@ -576,6 +576,14 @@ func (s *Server) handlePurchases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ps)
 }
 
+func (s *Server) handleDeletePurchase(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.DeletePurchase(r.Context(), idParam(r, "id")); err != nil {
+		s.fail(w, err, "delete purchase")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ---- system / backup / export ----
 
 func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {

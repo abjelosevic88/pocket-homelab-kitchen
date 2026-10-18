@@ -118,3 +118,15 @@ func (s *Store) SpendStats(ctx context.Context) (month, year int64, cur string) 
 	_ = s.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount), 0) FROM purchases WHERE date >= ?`, today[:4]+"-01-01").Scan(&year)
 	return
 }
+
+// DeletePurchase removes a checkout record (the pantry and Split stay as they are).
+func (s *Store) DeletePurchase(ctx context.Context, id int64) error {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM purchases WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

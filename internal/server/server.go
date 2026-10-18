@@ -305,6 +305,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/cooklog", s.handleCookLog)
 			r.Delete("/cooklog/{id}", s.handleDeleteCook)
 			r.Get("/purchases", s.handlePurchases)
+			r.Delete("/purchases/{id}", s.handleDeletePurchase)
 
 			r.Post("/integrations/test", s.handleIntegrationTest)
 			r.Get("/split/groups", s.handleSplitGroups)
