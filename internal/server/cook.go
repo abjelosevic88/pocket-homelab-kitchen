@@ -101,7 +101,7 @@ func (s *Server) cook(r *http.Request, rc *store.Recipe, in cookInput) (*cookRes
 				res.Warnings = append(res.Warnings, p.Name+": "+err.Error())
 				continue
 			}
-			res.Deducted = append(res.Deducted, fmt.Sprintf("%s %s (%s left)", units.Format(-delta, p.Unit), p.Name, units.Format(p.Quantity, p.Unit)))
+			res.Deducted = append(res.Deducted, fmt.Sprintf("%s %s (%s left)", units.Format(-delta, p.Unit), p.Name, units.FormatZero(p.Quantity, p.Unit)))
 		}
 	}
 	if habit && cl.habits.Configured() && cl.st.HabitID > 0 {

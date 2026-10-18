@@ -108,13 +108,24 @@ func round(v float64, places int) float64 {
 	return math.Round(v*p) / p
 }
 
-// Format renders "1.5 kg", "2 pcs", "3" (count without a unit) or "to taste".
+// Format renders "1.5 kg", "2" (pieces), "pinch" (a unit with no quantity) or "".
 func Format(qty float64, unit string) string {
 	if qty == 0 {
 		if unit != "" {
 			return unit
 		}
 		return ""
+	}
+	return FormatZero(qty, unit)
+}
+
+// FormatZero is Format but renders a zero quantity as "0" / "0 g" (for "… left" messages).
+func FormatZero(qty float64, unit string) string {
+	if qty == 0 {
+		if unit == "" || unit == "pcs" {
+			return "0"
+		}
+		return "0 " + unit
 	}
 	q := strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", qty), "0"), ".")
 	if unit == "" || unit == "pcs" {

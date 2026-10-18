@@ -573,7 +573,7 @@ func (s *Server) restockItem(r *http.Request, cl clients, it store.ListItem) (st
 		if err := s.adjustPantry(r, cl, p, delta, "Bought ("+it.Name+")"); err != nil {
 			return "", p.Name + ": " + err.Error()
 		}
-		return fmt.Sprintf("%s (%s)", p.Name, units.Format(p.Quantity, p.Unit)), ""
+		return fmt.Sprintf("%s (%s)", p.Name, units.FormatZero(p.Quantity, p.Unit)), ""
 	}
 	np := &store.PantryItem{Name: it.Name, Quantity: qty, Unit: units.Normalize(it.Unit), Location: cl.st.InventoryLocation, Category: it.Aisle}
 	if err := s.createPantry(r, cl, np); err != nil {
