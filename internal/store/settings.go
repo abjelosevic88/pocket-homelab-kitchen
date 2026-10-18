@@ -1,0 +1,148 @@
+package store
+
+import (
+	"context"
+	"strconv"
+)
+
+// DefaultTitle is the app title until someone changes it.
+const DefaultTitle = "Pocket Kitchen"
+
+// GetSettings loads all settings with defaults applied.
+func (s *Store) GetSettings(ctx context.Context) (Settings, error) {
+	st := Settings{Title: DefaultTitle, HomeCurrency: "EUR", DateFormat: "auto", TimeFormat: "auto", WeekStart: "mon", DefaultServings: 2, NotifyFormat: "apprise", NotifyHour: 9, NotifyPlan: true, NotifyExpiry: true,
+		InventoryTag: "pantry", InventoryAutoSync: true, SplitCategory: "groceries", FoodFacts: true}
+	rows, err := s.DB.QueryContext(ctx, `SELECT key, value FROM settings`)
+	if err != nil {
+		return st, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return st, err
+		}
+		switch k {
+		case "title":
+			if v != "" {
+				st.Title = v
+			}
+		case "home_currency":
+			if v != "" {
+				st.HomeCurrency = v
+			}
+		case "date_format":
+			if v != "" {
+				st.DateFormat = v
+			}
+		case "time_format":
+			if v != "" {
+				st.TimeFormat = v
+			}
+		case "week_start":
+			if v == "sun" {
+				st.WeekStart = "sun"
+			}
+		case "default_servings":
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				st.DefaultServings = n
+			}
+		case "notify_url":
+			st.NotifyURL = v
+		case "notify_format":
+			if v != "" {
+				st.NotifyFormat = v
+			}
+		case "notify_hour":
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 23 {
+				st.NotifyHour = n
+			}
+		case "notify_plan":
+			st.NotifyPlan = v != "0"
+		case "notify_expiry":
+			st.NotifyExpiry = v != "0"
+		case "inventory_url":
+			st.InventoryURL = v
+		case "inventory_token":
+			st.InventoryToken = v
+		case "inventory_tag":
+			if v != "" {
+				st.InventoryTag = v
+			}
+		case "inventory_location":
+			st.InventoryLocation = v
+		case "inventory_auto_sync":
+			st.InventoryAutoSync = v != "0"
+		case "split_url":
+			st.SplitURL = v
+		case "split_token":
+			st.SplitToken = v
+		case "split_public_url":
+			st.SplitPublicURL = v
+		case "split_group_id":
+			st.SplitGroupID, _ = strconv.ParseInt(v, 10, 64)
+		case "split_member_id":
+			st.SplitMemberID, _ = strconv.ParseInt(v, 10, 64)
+		case "split_category":
+			if v != "" {
+				st.SplitCategory = v
+			}
+		case "habits_url":
+			st.HabitsURL = v
+		case "habits_token":
+			st.HabitsToken = v
+		case "habit_id":
+			st.HabitID, _ = strconv.ParseInt(v, 10, 64)
+		case "food_facts":
+			st.FoodFacts = v != "0"
+		case "setup_complete":
+			st.SetupComplete = v == "1"
+		}
+	}
+	return st, rows.Err()
+}
+
+// SaveSettings persists all settings.
+func (s *Store) SaveSettings(ctx context.Context, st Settings) error {
+	b := map[bool]string{true: "1", false: "0"}
+	kv := map[string]string{
+		"title":               st.Title,
+		"home_currency":       st.HomeCurrency,
+		"date_format":         st.DateFormat,
+		"time_format":         st.TimeFormat,
+		"week_start":          st.WeekStart,
+		"default_servings":    strconv.Itoa(st.DefaultServings),
+		"notify_url":          st.NotifyURL,
+		"notify_format":       st.NotifyFormat,
+		"notify_hour":         strconv.Itoa(st.NotifyHour),
+		"notify_plan":         b[st.NotifyPlan],
+		"notify_expiry":       b[st.NotifyExpiry],
+		"inventory_url":       st.InventoryURL,
+		"inventory_token":     st.InventoryToken,
+		"inventory_tag":       st.InventoryTag,
+		"inventory_location":  st.InventoryLocation,
+		"inventory_auto_sync": b[st.InventoryAutoSync],
+		"split_url":           st.SplitURL,
+		"split_token":         st.SplitToken,
+		"split_public_url":    st.SplitPublicURL,
+		"split_group_id":      strconv.FormatInt(st.SplitGroupID, 10),
+		"split_member_id":     strconv.FormatInt(st.SplitMemberID, 10),
+		"split_category":      st.SplitCategory,
+		"habits_url":          st.HabitsURL,
+		"habits_token":        st.HabitsToken,
+		"habit_id":            strconv.FormatInt(st.HabitID, 10),
+		"food_facts":          b[st.FoodFacts],
+		"setup_complete":      b[st.SetupComplete],
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	for k, v := range kv {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, k, v); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}

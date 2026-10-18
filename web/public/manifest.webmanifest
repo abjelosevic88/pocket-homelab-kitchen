@@ -1,0 +1,10 @@
+{
+  "name": "Pocket Kitchen",
+  "short_name": "Kitchen",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f6f8",
+  "theme_color": "#15803d",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }, { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }],
+  "shortcuts": [{ "name": "Shopping list", "url": "/shopping" }, { "name": "This week", "url": "/plan" }, { "name": "Scan a barcode", "url": "/pantry?scan=1" }]
+}

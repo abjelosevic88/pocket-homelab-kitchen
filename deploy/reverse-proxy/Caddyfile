@@ -1,0 +1,5 @@
+# Pocket Kitchen behind Caddy. Keep /api/* reachable for the phone shortcuts
+# and the Homepage widget — they send their own bearer token.
+kitchen.example.com {
+	reverse_proxy pocket-kitchen:8080
+}

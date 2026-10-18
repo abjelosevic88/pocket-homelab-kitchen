@@ -1,0 +1,27 @@
+# Pocket Kitchen — self-hosted recipes, meal plan, shopping lists and pantry (Go + SQLite). One container, one volume.
+services:
+  pocket-kitchen:
+    image: ghcr.io/abjelosevic88/pocket-homelab-kitchen:latest
+    container_name: pocket-kitchen
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      BASE_URL: ${BASE_URL:-http://localhost:8080}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-EUR}
+      # First admin (only used while the database has no users):
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Integrations can also be set in the UI under Settings → Integrations.
+      INVENTORY_URL: ${INVENTORY_URL:-}
+      INVENTORY_TOKEN: ${INVENTORY_TOKEN:-}
+      SPLIT_URL: ${SPLIT_URL:-}
+      SPLIT_TOKEN: ${SPLIT_TOKEN:-}
+      HABITS_URL: ${HABITS_URL:-}
+      HABITS_TOKEN: ${HABITS_TOKEN:-}
+      NOTIFY_URL: ${NOTIFY_URL:-}
+    volumes:
+      - ./data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

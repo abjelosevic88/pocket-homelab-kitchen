@@ -1,0 +1,23 @@
+[Unit]
+Description=Pocket Kitchen — self-hosted recipes, meal plan, shopping lists and pantry
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pocket-kitchen
+Group=pocket-kitchen
+ExecStart=/usr/local/bin/pocket-kitchen
+Environment=DATA_DIR=/var/lib/pocket-kitchen
+Environment=PORT=8080
+Environment=BASE_URL=https://kitchen.example.com
+Environment=SECURE_COOKIES=true
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/pocket-kitchen
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
