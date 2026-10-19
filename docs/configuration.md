@@ -17,6 +17,9 @@ Everything is read from environment variables; every value has a default so a ba
 | `AUTH_PROXY_HEADER` / `AUTH_PROXY_EMAIL_HEADER` | `Remote-User` / `Remote-Email` | Headers for proxy mode |
 | `SESSION_TTL` | `720h` | Cookie lifetime |
 | `SECURE_COOKIES` | `false` | Set `true` behind HTTPS |
+| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | – | Sign in with an OpenID Connect provider (PocketID, Authelia, Authentik, Keycloak…). Needs `BASE_URL`; the callback is `BASE_URL/api/v1/auth/oidc/callback`. On a box with Pocket Core none of these are needed — the app receives its client when it registers. |
+| `OIDC_NAME` | `single sign-on` | Button label: “Sign in with …” (“Pocket Core” when the client came from Core) |
+| `OIDC_AUTO_CREATE` | `true` | Give an unknown (verified) email a member account instead of refusing it. Always on for the Core-issued client |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | – | Create the first admin on an empty database (otherwise the UI asks) |
 | `DEFAULT_CURRENCY` | `EUR` | Home currency for grocery spend |
 | `INVENTORY_URL` / `INVENTORY_TOKEN` | – | Pocket Inventory base URL and an API token |

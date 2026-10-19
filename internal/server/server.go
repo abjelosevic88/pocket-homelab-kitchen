@@ -48,6 +48,9 @@ type Server struct {
 	syncing   bool
 	notifyDay string
 
+	oidcMu sync.Mutex
+	oidc   *oidcProvider // for the issuer in use; rebuilt when it changes
+
 	core     *core.Client
 	coreMu   sync.Mutex
 	coreOK   bool
@@ -62,7 +65,7 @@ type resolvedURL struct {
 
 // New creates a server.
 func New(cfg *config.Config, st *store.Store, log *slog.Logger, webFS fs.FS) *Server {
-	return &Server{cfg: cfg, store: st, log: log, webFS: webFS, started: time.Now(), off: foodfacts.New(cfg.UserAgent),
+	return &Server{cfg: cfg, store: st, log: log, webFS: webFS, started: time.Now(), off: foodfacts.New(cfg.UserAgent), oidc: &oidcProvider{},
 		core:     core.New(cfg.CoreURL, core.Options{TokenFile: cfg.DataDir + "/core.token", UserAgent: cfg.UserAgent}),
 		resolved: map[string]resolvedURL{}}
 }
@@ -266,6 +269,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/auth/login", s.handleLogin)
 		r.Post("/auth/setup", s.handleSetup)
 		r.Get("/auth/status", s.handleAuthStatus)
+		r.Get("/auth/oidc/start", s.handleOIDCStart)
+		r.Get("/auth/oidc/callback", s.handleOIDCCallback)
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
@@ -488,13 +493,18 @@ func (s *Server) coreLoop(ctx context.Context) {
 }
 
 func (s *Server) registerWithCore(ctx context.Context) error {
-	reg, err := s.core.Register(ctx, s.cfg.CoreRegistrationKey, core.Manifest{
+	m := core.Manifest{
 		Slug: "kitchen", Name: "Pocket Kitchen",
 		Description: "Recipes, the week's meal plan, the shopping list and the pantry.",
 		Icon:        "/favicon.svg", Version: Version,
 		URL: s.cfg.CoreAppURL, PublicURL: s.cfg.BaseURL, HealthPath: "/healthz", EnvPrefix: "KITCHEN",
 		Publishes: []string{"kitchen.cooked", "kitchen.checkout"},
-	})
+	}
+	if s.cfg.BaseURL != "" {
+		// ask Core for a relying-party client so "Sign in with Pocket Core" needs no configuration
+		m.OIDC = &core.OIDCRequest{RedirectURIs: []string{s.oidcCallbackURL()}}
+	}
+	reg, err := s.core.Register(ctx, s.cfg.CoreRegistrationKey, m)
 	if err != nil {
 		return err
 	}
