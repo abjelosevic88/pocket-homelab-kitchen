@@ -14,18 +14,19 @@ import (
 
 // syncPantry pulls every Pocket Inventory item carrying the pantry tag into
 // the mirror table: new ones are created, known ones updated, and mirrors
-// whose item lost the tag (or was archived) are archived here.
-func (s *Server) syncPantry(ctx context.Context) (map[string]int, error) {
+// whose item lost the tag (or was archived) are archived here. It runs for one
+// user with that user's own Inventory connection into that user's pantry.
+func (s *Server) syncPantry(ctx context.Context, uid int64) (map[string]int, error) {
 	s.syncMu.Lock()
-	if s.syncing {
+	if s.syncing[uid] {
 		s.syncMu.Unlock()
 		return nil, errors.New("a sync is already running")
 	}
-	s.syncing = true
+	s.syncing[uid] = true
 	s.syncMu.Unlock()
-	defer func() { s.syncMu.Lock(); s.syncing = false; s.syncMu.Unlock() }()
+	defer func() { s.syncMu.Lock(); delete(s.syncing, uid); s.syncMu.Unlock() }()
 
-	cl := s.clients(ctx)
+	cl := s.clients(ctx, uid)
 	if !cl.inventory.Configured() {
 		return nil, errors.New("Pocket Inventory is not configured")
 	}
@@ -41,16 +42,16 @@ func (s *Server) syncPantry(ctx context.Context) (map[string]int, error) {
 		}
 		keep = append(keep, it.ID)
 		counts["total"]++
-		p, err := s.store.GetPantryByInventory(ctx, it.ID)
+		p, err := s.store.GetPantryByInventory(ctx, uid, it.ID)
 		if err != nil {
 			// a local row with the same name adopts the inventory item
-			if lp, err2 := s.store.FindPantryByName(ctx, it.Name); err2 == nil && lp.InventoryID == nil {
+			if lp, err2 := s.store.FindPantryByName(ctx, uid, it.Name); err2 == nil && lp.InventoryID == nil {
 				p = lp
 			} else {
 				id := it.ID
 				p = &store.PantryItem{InventoryID: &id}
 				fillPantry(p, it, cl.st)
-				if err := s.store.CreatePantry(ctx, p); err != nil {
+				if err := s.store.CreatePantry(ctx, uid, p); err != nil {
 					s.log.Warn("pantry sync: create", "item", it.Name, "err", err)
 					continue
 				}
@@ -61,17 +62,20 @@ func (s *Server) syncPantry(ctx context.Context) (map[string]int, error) {
 		id := it.ID
 		p.InventoryID = &id
 		fillPantry(p, it, cl.st)
-		if err := s.store.UpdatePantry(ctx, p); err != nil {
+		if err := s.store.UpdatePantry(ctx, uid, p); err != nil {
 			s.log.Warn("pantry sync: update", "item", it.Name, "err", err)
 			continue
 		}
 		counts["updated"]++
 	}
-	n, _ := s.store.ArchiveMirrorsNotIn(ctx, keep)
+	n, _ := s.store.ArchiveMirrorsNotIn(ctx, uid, keep)
 	counts["archived"] = int(n)
-	_ = s.store.CachePut(ctx, "pantry:synced_at", store.Now())
+	_ = s.store.CachePut(ctx, syncedKey(uid), store.Now())
 	return counts, nil
 }
+
+// syncedKey is the cache key remembering a user's last pantry sync.
+func syncedKey(uid int64) string { return "pantry:synced_at:" + itoa64(uid) }
 
 func fillPantry(p *store.PantryItem, it pocket.Item, st store.Settings) {
 	p.Name, p.Quantity, p.Unit, p.MinQuantity = it.Name, it.Quantity, units.Normalize(it.Unit), it.MinQuantity
@@ -98,7 +102,7 @@ func itoa64(n int64) string {
 }
 
 func (s *Server) handleSyncPantry(w http.ResponseWriter, r *http.Request) {
-	counts, err := s.syncPantry(r.Context())
+	counts, err := s.syncPantry(r.Context(), actorID(r.Context()))
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -126,12 +130,12 @@ func (s *Server) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	out := lookupResult{Barcode: code, Source: "none"}
-	if p, err := s.store.GetPantryByBarcode(ctx, code); err == nil {
+	if p, err := s.store.GetPantryByBarcode(ctx, actorID(ctx), code); err == nil {
 		out.Source, out.Pantry = "pantry", p
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	cl := s.clients(ctx)
+	cl := s.clients(ctx, actorID(ctx))
 	if cl.inventory.Configured() {
 		if it, err := cl.inventory.LookupBarcode(ctx, code); err != nil {
 			out.Error = "Pocket Inventory: " + err.Error()

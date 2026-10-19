@@ -33,9 +33,9 @@ type PantryFilter struct {
 }
 
 // ListPantry returns pantry rows.
-func (s *Store) ListPantry(ctx context.Context, f PantryFilter) ([]PantryItem, error) {
-	where := []string{"archived = ?"}
-	args := []any{boolInt(f.Archived)}
+func (s *Store) ListPantry(ctx context.Context, uid int64, f PantryFilter) ([]PantryItem, error) {
+	where := []string{"user_id = ?", "archived = ?"}
+	args := []any{uid, boolInt(f.Archived)}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		like := "%" + strings.ToLower(q) + "%"
 		where = append(where, `(LOWER(name) LIKE ? OR LOWER(brand) LIKE ? OR LOWER(category) LIKE ? OR barcode = ?)`)
@@ -72,30 +72,30 @@ func (s *Store) ListPantry(ctx context.Context, f PantryFilter) ([]PantryItem, e
 	return out, rows.Err()
 }
 
-// GetPantry returns one row.
-func (s *Store) GetPantry(ctx context.Context, id int64) (*PantryItem, error) {
-	return scanPantry(s.DB.QueryRowContext(ctx, `SELECT `+pantryCols+` FROM pantry WHERE id = ?`, id))
+// GetPantry returns one of the user's rows.
+func (s *Store) GetPantry(ctx context.Context, uid, id int64) (*PantryItem, error) {
+	return scanPantry(s.DB.QueryRowContext(ctx, `SELECT `+pantryCols+` FROM pantry WHERE id = ? AND user_id = ?`, id, uid))
 }
 
-// GetPantryByInventory finds the mirror row of an inventory item.
-func (s *Store) GetPantryByInventory(ctx context.Context, invID int64) (*PantryItem, error) {
-	return scanPantry(s.DB.QueryRowContext(ctx, `SELECT `+pantryCols+` FROM pantry WHERE inventory_id = ?`, invID))
+// GetPantryByInventory finds the user's mirror row of an inventory item.
+func (s *Store) GetPantryByInventory(ctx context.Context, uid, invID int64) (*PantryItem, error) {
+	return scanPantry(s.DB.QueryRowContext(ctx, `SELECT `+pantryCols+` FROM pantry WHERE user_id = ? AND inventory_id = ?`, uid, invID))
 }
 
-// GetPantryByBarcode finds a row by barcode.
-func (s *Store) GetPantryByBarcode(ctx context.Context, code string) (*PantryItem, error) {
-	return scanPantry(s.DB.QueryRowContext(ctx, `SELECT `+pantryCols+` FROM pantry WHERE barcode = ? AND barcode <> '' ORDER BY archived LIMIT 1`, strings.TrimSpace(code)))
+// GetPantryByBarcode finds one of the user's rows by barcode.
+func (s *Store) GetPantryByBarcode(ctx context.Context, uid int64, code string) (*PantryItem, error) {
+	return scanPantry(s.DB.QueryRowContext(ctx, `SELECT `+pantryCols+` FROM pantry WHERE user_id = ? AND barcode = ? AND barcode <> '' ORDER BY archived LIMIT 1`, uid, strings.TrimSpace(code)))
 }
 
 // FindPantryByName matches an ingredient name to a pantry row: the same
 // name ignoring case and plural ("eggs" = "egg"), or the same name after a
 // leading descriptor ("large eggs", "plain flour", "fresh parsley").
-func (s *Store) FindPantryByName(ctx context.Context, name string) (*PantryItem, error) {
+func (s *Store) FindPantryByName(ctx context.Context, uid int64, name string) (*PantryItem, error) {
 	n := NormalizeName(name)
 	if n == "" {
 		return nil, ErrNotFound
 	}
-	rows, err := s.DB.QueryContext(ctx, `SELECT `+pantryCols+` FROM pantry WHERE archived = 0`)
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+pantryCols+` FROM pantry WHERE user_id = ? AND archived = 0`, uid)
 	if err != nil {
 		return nil, err
 	}
@@ -159,14 +159,17 @@ func NormalizeName(s string) string {
 }
 
 // CreatePantry inserts a row.
-func (s *Store) CreatePantry(ctx context.Context, p *PantryItem) error {
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO pantry (inventory_id, name, quantity, unit, min_quantity, location, category, barcode, brand, expiry_date, notes, photo_url, archived, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		nullI(p.InventoryID), strings.TrimSpace(p.Name), p.Quantity, p.Unit, p.MinQuantity, p.Location, p.Category, strings.TrimSpace(p.Barcode), p.Brand, p.ExpiryDate, p.Notes, p.PhotoURL, boolInt(p.Archived), p.SyncedAt)
+func (s *Store) CreatePantry(ctx context.Context, uid int64, p *PantryItem) error {
+	if uid <= 0 {
+		return ErrNotFound
+	}
+	res, err := s.DB.ExecContext(ctx, `INSERT INTO pantry (inventory_id, name, quantity, unit, min_quantity, location, category, barcode, brand, expiry_date, notes, photo_url, archived, synced_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		nullI(p.InventoryID), strings.TrimSpace(p.Name), p.Quantity, p.Unit, p.MinQuantity, p.Location, p.Category, strings.TrimSpace(p.Barcode), p.Brand, p.ExpiryDate, p.Notes, p.PhotoURL, boolInt(p.Archived), p.SyncedAt, uid)
 	if err != nil {
 		return conflict(err)
 	}
 	p.ID, _ = res.LastInsertId()
-	np, err := s.GetPantry(ctx, p.ID)
+	np, err := s.GetPantry(ctx, uid, p.ID)
 	if err == nil {
 		*p = *np
 	}
@@ -174,13 +177,16 @@ func (s *Store) CreatePantry(ctx context.Context, p *PantryItem) error {
 }
 
 // UpdatePantry saves a row.
-func (s *Store) UpdatePantry(ctx context.Context, p *PantryItem) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE pantry SET inventory_id = ?, name = ?, quantity = ?, unit = ?, min_quantity = ?, location = ?, category = ?, barcode = ?, brand = ?, expiry_date = ?, notes = ?, photo_url = ?, archived = ?, updated_at = ?, synced_at = ? WHERE id = ?`,
-		nullI(p.InventoryID), strings.TrimSpace(p.Name), p.Quantity, p.Unit, p.MinQuantity, p.Location, p.Category, strings.TrimSpace(p.Barcode), p.Brand, p.ExpiryDate, p.Notes, p.PhotoURL, boolInt(p.Archived), Now(), p.SyncedAt, p.ID)
+func (s *Store) UpdatePantry(ctx context.Context, uid int64, p *PantryItem) error {
+	res, err := s.DB.ExecContext(ctx, `UPDATE pantry SET inventory_id = ?, name = ?, quantity = ?, unit = ?, min_quantity = ?, location = ?, category = ?, barcode = ?, brand = ?, expiry_date = ?, notes = ?, photo_url = ?, archived = ?, updated_at = ?, synced_at = ? WHERE id = ? AND user_id = ?`,
+		nullI(p.InventoryID), strings.TrimSpace(p.Name), p.Quantity, p.Unit, p.MinQuantity, p.Location, p.Category, strings.TrimSpace(p.Barcode), p.Brand, p.ExpiryDate, p.Notes, p.PhotoURL, boolInt(p.Archived), Now(), p.SyncedAt, p.ID, uid)
 	if err != nil {
 		return conflict(err)
 	}
-	np, err := s.GetPantry(ctx, p.ID)
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	np, err := s.GetPantry(ctx, uid, p.ID)
 	if err == nil {
 		*p = *np
 	}
@@ -188,8 +194,8 @@ func (s *Store) UpdatePantry(ctx context.Context, p *PantryItem) error {
 }
 
 // DeletePantry removes a row.
-func (s *Store) DeletePantry(ctx context.Context, id int64) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM pantry WHERE id = ?`, id)
+func (s *Store) DeletePantry(ctx context.Context, uid, id int64) error {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM pantry WHERE id = ? AND user_id = ?`, id, uid)
 	if err != nil {
 		return err
 	}
@@ -200,20 +206,20 @@ func (s *Store) DeletePantry(ctx context.Context, id int64) error {
 }
 
 // ArchiveMirrorsNotIn archives mirror rows whose inventory item is gone from the tag.
-func (s *Store) ArchiveMirrorsNotIn(ctx context.Context, keep []int64) (int64, error) {
+func (s *Store) ArchiveMirrorsNotIn(ctx context.Context, uid int64, keep []int64) (int64, error) {
 	if len(keep) == 0 {
-		res, err := s.DB.ExecContext(ctx, `UPDATE pantry SET archived = 1, updated_at = ? WHERE inventory_id IS NOT NULL AND archived = 0`, Now())
+		res, err := s.DB.ExecContext(ctx, `UPDATE pantry SET archived = 1, updated_at = ? WHERE user_id = ? AND inventory_id IS NOT NULL AND archived = 0`, Now(), uid)
 		if err != nil {
 			return 0, err
 		}
 		return res.RowsAffected()
 	}
 	ph := strings.Repeat("?,", len(keep))
-	args := []any{Now()}
+	args := []any{Now(), uid}
 	for _, k := range keep {
 		args = append(args, k)
 	}
-	res, err := s.DB.ExecContext(ctx, `UPDATE pantry SET archived = 1, updated_at = ? WHERE inventory_id IS NOT NULL AND archived = 0 AND inventory_id NOT IN (`+ph[:len(ph)-1]+`)`, args...)
+	res, err := s.DB.ExecContext(ctx, `UPDATE pantry SET archived = 1, updated_at = ? WHERE user_id = ? AND inventory_id IS NOT NULL AND archived = 0 AND inventory_id NOT IN (`+ph[:len(ph)-1]+`)`, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -221,8 +227,8 @@ func (s *Store) ArchiveMirrorsNotIn(ctx context.Context, keep []int64) (int64, e
 }
 
 // PantryFacets returns locations and categories in use.
-func (s *Store) PantryFacets(ctx context.Context) (locations, categories []string, err error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT location, category FROM pantry WHERE archived = 0`)
+func (s *Store) PantryFacets(ctx context.Context, uid int64) (locations, categories []string, err error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT location, category FROM pantry WHERE user_id = ? AND archived = 0`, uid)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -252,7 +258,14 @@ func (s *Store) PantryFacets(ctx context.Context) (locations, categories []strin
 }
 
 // PantryStats counts rows / low / expiring.
-func (s *Store) PantryStats(ctx context.Context) (total, low, expiring int) {
-	_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(1), SUM(CASE WHEN min_quantity > 0 AND quantity <= min_quantity THEN 1 ELSE 0 END), SUM(CASE WHEN expiry_date <> '' AND expiry_date <= ? THEN 1 ELSE 0 END) FROM pantry WHERE archived = 0`, time.Now().AddDate(0, 0, 7).Format("2006-01-02")).Scan(&total, &low, &expiring)
+func (s *Store) PantryStats(ctx context.Context, uid int64) (total, low, expiring int) {
+	var l, e *int
+	_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(1), SUM(CASE WHEN min_quantity > 0 AND quantity <= min_quantity THEN 1 ELSE 0 END), SUM(CASE WHEN expiry_date <> '' AND expiry_date <= ? THEN 1 ELSE 0 END) FROM pantry WHERE user_id = ? AND archived = 0`, time.Now().AddDate(0, 0, 7).Format("2006-01-02"), uid).Scan(&total, &l, &e)
+	if l != nil {
+		low = *l
+	}
+	if e != nil {
+		expiring = *e
+	}
 	return
 }

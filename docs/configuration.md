@@ -22,7 +22,7 @@ Everything is read from environment variables; every value has a default so a ba
 | `OIDC_AUTO_CREATE` | `true` | Give an unknown (verified) email a member account instead of refusing it. Always on for the Core-issued client |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | – | Create the first admin on an empty database (otherwise the UI asks) |
 | `DEFAULT_CURRENCY` | `EUR` | Home currency for grocery spend |
-| `INVENTORY_URL` / `INVENTORY_TOKEN` | – | Pocket Inventory base URL and an API token |
+| `INVENTORY_URL` / `INVENTORY_TOKEN` | – | Pocket Inventory base URL and an API token. These and the `SPLIT_*` / `HABITS_*` / `NOTIFY_*` values below are the owner's (first admin's) own connections; other accounts start unconnected and set their own under Settings → Integrations |
 | `INVENTORY_TAG` | `pantry` | Inventory items carrying this tag are the pantry |
 | `SPLIT_URL` / `SPLIT_TOKEN` / `SPLIT_PUBLIC_URL` / `SPLIT_GROUP_ID` | – | Pocket Split (public URL = what the browser opens for the expense link) |
 | `HABITS_URL` / `HABITS_TOKEN` / `HABITS_HABIT_ID` | – | Pocket Habits and the habit to mark when something is cooked |
@@ -35,7 +35,7 @@ Everything is read from environment variables; every value has a default so a ba
 
 ## Auth modes
 
-- **local** — accounts with email + password. The first account created becomes admin.
+- **local** — accounts with email + password. The first account created becomes admin (the owner). Accounts created on first contact (Pocket Core / OIDC sign-in, Core device tokens) are always members.
 - **proxy** — trust a forward-auth proxy (Authelia, Authentik, Tinyauth…). Users are created on first visit. Keep `/api/*` outside the forward-auth rule if a shortcut or the Homepage widget needs it.
 - **none** — no login at all; one implicit admin. Only for a trusted LAN.
 

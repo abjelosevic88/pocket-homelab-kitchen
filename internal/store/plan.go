@@ -20,8 +20,8 @@ func scanPlan(row interface{ Scan(...any) error }) (*PlanEntry, error) {
 }
 
 // ListPlan returns entries between two dates inclusive.
-func (s *Store) ListPlan(ctx context.Context, from, to string) ([]PlanEntry, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT `+planCols+` FROM plan p LEFT JOIN recipes r ON r.id = p.recipe_id WHERE p.date >= ? AND p.date <= ? ORDER BY p.date, CASE p.slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, p.sort_order, p.id`, from, to)
+func (s *Store) ListPlan(ctx context.Context, uid int64, from, to string) ([]PlanEntry, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+planCols+` FROM plan p LEFT JOIN recipes r ON r.id = p.recipe_id AND r.user_id = p.user_id WHERE p.user_id = ? AND p.date >= ? AND p.date <= ? ORDER BY p.date, CASE p.slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, p.sort_order, p.id`, uid, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -38,19 +38,22 @@ func (s *Store) ListPlan(ctx context.Context, from, to string) ([]PlanEntry, err
 }
 
 // GetPlan returns one entry.
-func (s *Store) GetPlan(ctx context.Context, id int64) (*PlanEntry, error) {
-	return scanPlan(s.DB.QueryRowContext(ctx, `SELECT `+planCols+` FROM plan p LEFT JOIN recipes r ON r.id = p.recipe_id WHERE p.id = ?`, id))
+func (s *Store) GetPlan(ctx context.Context, uid, id int64) (*PlanEntry, error) {
+	return scanPlan(s.DB.QueryRowContext(ctx, `SELECT `+planCols+` FROM plan p LEFT JOIN recipes r ON r.id = p.recipe_id AND r.user_id = p.user_id WHERE p.id = ? AND p.user_id = ?`, id, uid))
 }
 
 // CreatePlan inserts an entry.
-func (s *Store) CreatePlan(ctx context.Context, p *PlanEntry) error {
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO plan (date, slot, recipe_id, title, servings, notes, sort_order, created_by) VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM plan WHERE date = ? AND slot = ?), ?)`,
-		p.Date, p.Slot, nullI(p.RecipeID), strings.TrimSpace(p.Title), p.Servings, p.Notes, p.Date, p.Slot, nullI(p.CreatedBy))
+func (s *Store) CreatePlan(ctx context.Context, uid int64, p *PlanEntry) error {
+	if uid <= 0 {
+		return ErrNotFound
+	}
+	res, err := s.DB.ExecContext(ctx, `INSERT INTO plan (date, slot, recipe_id, title, servings, notes, sort_order, created_by, user_id) VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM plan WHERE user_id = ? AND date = ? AND slot = ?), ?, ?)`,
+		p.Date, p.Slot, nullI(p.RecipeID), strings.TrimSpace(p.Title), p.Servings, p.Notes, uid, p.Date, p.Slot, nullI(p.CreatedBy), uid)
 	if err != nil {
 		return err
 	}
 	p.ID, _ = res.LastInsertId()
-	np, err := s.GetPlan(ctx, p.ID)
+	np, err := s.GetPlan(ctx, uid, p.ID)
 	if err == nil {
 		*p = *np
 	}
@@ -58,13 +61,16 @@ func (s *Store) CreatePlan(ctx context.Context, p *PlanEntry) error {
 }
 
 // UpdatePlan saves date/slot/recipe/title/servings/notes/cooked.
-func (s *Store) UpdatePlan(ctx context.Context, p *PlanEntry) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE plan SET date = ?, slot = ?, recipe_id = ?, title = ?, servings = ?, notes = ?, cooked_at = ?, cook_id = ?, sort_order = ? WHERE id = ?`,
-		p.Date, p.Slot, nullI(p.RecipeID), strings.TrimSpace(p.Title), p.Servings, p.Notes, p.CookedAt, nullI(p.CookID), p.SortOrder, p.ID)
+func (s *Store) UpdatePlan(ctx context.Context, uid int64, p *PlanEntry) error {
+	res, err := s.DB.ExecContext(ctx, `UPDATE plan SET date = ?, slot = ?, recipe_id = ?, title = ?, servings = ?, notes = ?, cooked_at = ?, cook_id = ?, sort_order = ? WHERE id = ? AND user_id = ?`,
+		p.Date, p.Slot, nullI(p.RecipeID), strings.TrimSpace(p.Title), p.Servings, p.Notes, p.CookedAt, nullI(p.CookID), p.SortOrder, p.ID, uid)
 	if err != nil {
 		return err
 	}
-	np, err := s.GetPlan(ctx, p.ID)
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	np, err := s.GetPlan(ctx, uid, p.ID)
 	if err == nil {
 		*p = *np
 	}
@@ -72,8 +78,8 @@ func (s *Store) UpdatePlan(ctx context.Context, p *PlanEntry) error {
 }
 
 // DeletePlan removes an entry.
-func (s *Store) DeletePlan(ctx context.Context, id int64) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM plan WHERE id = ?`, id)
+func (s *Store) DeletePlan(ctx context.Context, uid, id int64) error {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM plan WHERE id = ? AND user_id = ?`, id, uid)
 	if err != nil {
 		return err
 	}
@@ -84,15 +90,15 @@ func (s *Store) DeletePlan(ctx context.Context, id int64) error {
 }
 
 // CountPlannedForRecipe returns how many future (or today) entries use the recipe.
-func (s *Store) CountPlannedForRecipe(ctx context.Context, recipeID int64) int {
+func (s *Store) CountPlannedForRecipe(ctx context.Context, uid, recipeID int64) int {
 	var n int
-	_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM plan WHERE recipe_id = ? AND date >= ? AND cooked_at = ''`, recipeID, Today()).Scan(&n)
+	_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM plan WHERE user_id = ? AND recipe_id = ? AND date >= ? AND cooked_at = ''`, uid, recipeID, Today()).Scan(&n)
 	return n
 }
 
 // PlanDatesForRecipe lists upcoming dates the recipe is planned on.
-func (s *Store) PlanDatesForRecipe(ctx context.Context, recipeID int64) []string {
-	rows, err := s.DB.QueryContext(ctx, `SELECT date FROM plan WHERE recipe_id = ? AND date >= ? ORDER BY date LIMIT 5`, recipeID, Today())
+func (s *Store) PlanDatesForRecipe(ctx context.Context, uid, recipeID int64) []string {
+	rows, err := s.DB.QueryContext(ctx, `SELECT date FROM plan WHERE user_id = ? AND recipe_id = ? AND date >= ? ORDER BY date LIMIT 5`, uid, recipeID, Today())
 	if err != nil {
 		return nil
 	}

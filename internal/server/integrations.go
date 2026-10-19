@@ -54,7 +54,7 @@ func (s *Server) publicSettings(st store.Settings) map[string]any {
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	st, err := s.store.GetSettings(r.Context())
+	st, err := s.store.GetSettings(r.Context(), actorID(r.Context()))
 	if err != nil {
 		s.fail(w, err, "settings")
 		return
@@ -62,11 +62,14 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.publicSettings(st))
 }
 
+// handlePutSettings saves the caller's personal settings (preferences,
+// notifications, their own Inventory / Split / Habits connections). The
+// box-wide keys (title, Open Food Facts) are only taken from an admin and are
+// silently ignored for everyone else, since the UI always sends the whole form.
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
-	}
-	cur, err := s.store.GetSettings(r.Context())
+	me := userFrom(r.Context())
+	isAdmin := me.Role == "admin"
+	cur, err := s.store.GetSettings(r.Context(), me.ID)
 	if err != nil {
 		s.fail(w, err, "settings")
 		return
@@ -77,7 +80,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if keys["title"] {
+	if keys["title"] && isAdmin {
 		cur.Title = strings.TrimSpace(in.Title)
 		if cur.Title == "" {
 			cur.Title = store.DefaultTitle
@@ -159,20 +162,25 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if keys["habit_id"] {
 		cur.HabitID = max(0, in.HabitID)
 	}
-	if keys["food_facts"] {
+	if keys["food_facts"] && isAdmin {
 		cur.FoodFacts = in.FoodFacts
 	}
-	if err := s.store.SaveSettings(r.Context(), cur); err != nil {
+	if err := s.store.SaveUserSettings(r.Context(), me.ID, cur); err != nil {
 		s.fail(w, err, "save settings")
 		return
+	}
+	if isAdmin && (keys["title"] || keys["food_facts"]) {
+		if err := s.store.SaveBoxSettings(r.Context(), cur); err != nil {
+			s.fail(w, err, "save settings")
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, s.publicSettings(cur))
 }
 
+// handleIntegrationTest checks a connection with the caller's own saved
+// settings (or the URL/key typed into the form).
 func (s *Server) handleIntegrationTest(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
-	}
 	var in struct {
 		Which  string `json:"which"`
 		URL    string `json:"url"`
@@ -183,7 +191,7 @@ func (s *Server) handleIntegrationTest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	st, _ := s.store.GetSettings(r.Context())
+	st, _ := s.store.GetSettings(r.Context(), actorID(r.Context()))
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	keyOr := func(saved string) string {
@@ -254,7 +262,7 @@ func (s *Server) handleIntegrationTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSplitGroups(w http.ResponseWriter, r *http.Request) {
-	cl := s.clients(r.Context())
+	cl := s.clients(r.Context(), actorID(r.Context()))
 	if !cl.split.Configured() {
 		writeJSON(w, http.StatusOK, []pocket.Group{})
 		return
@@ -281,7 +289,7 @@ func (s *Server) handleSplitGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSplitCategories(w http.ResponseWriter, r *http.Request) {
-	cl := s.clients(r.Context())
+	cl := s.clients(r.Context(), actorID(r.Context()))
 	if !cl.split.Configured() {
 		writeJSON(w, http.StatusOK, []string{})
 		return
@@ -298,7 +306,7 @@ func (s *Server) handleSplitCategories(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHabitsList(w http.ResponseWriter, r *http.Request) {
-	cl := s.clients(r.Context())
+	cl := s.clients(r.Context(), actorID(r.Context()))
 	if !cl.habits.Configured() {
 		writeJSON(w, http.StatusOK, []pocket.Habit{})
 		return
@@ -315,7 +323,7 @@ func (s *Server) handleHabitsList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInventoryLocations(w http.ResponseWriter, r *http.Request) {
-	cl := s.clients(r.Context())
+	cl := s.clients(r.Context(), actorID(r.Context()))
 	if !cl.inventory.Configured() {
 		writeJSON(w, http.StatusOK, []pocket.Named{})
 		return
@@ -334,7 +342,7 @@ func (s *Server) handleInventoryLocations(w http.ResponseWriter, r *http.Request
 // ---- notifications ----
 
 func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
-	cl := s.clients(r.Context())
+	cl := s.clients(r.Context(), actorID(r.Context()))
 	if err := cl.notify.Send(r.Context(), notify.Message{Title: "Pocket Kitchen", Body: "Test message.", Priority: "info"}); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -343,7 +351,7 @@ func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleNotifyRun(w http.ResponseWriter, r *http.Request) {
-	sent, err := s.sendDaily(r.Context(), true)
+	sent, err := s.sendDaily(r.Context(), actorID(r.Context()), true)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "sent": sent})
 		return
@@ -351,16 +359,17 @@ func (s *Server) handleNotifyRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sent": sent})
 }
 
-// sendDaily pushes today's plan and the pantry items about to expire.
-func (s *Server) sendDaily(ctx context.Context, force bool) (int, error) {
-	cl := s.clients(ctx)
+// sendDaily pushes one user's plan for today and their pantry items about to
+// expire to that user's own notification URL.
+func (s *Server) sendDaily(ctx context.Context, uid int64, force bool) (int, error) {
+	cl := s.clients(ctx, uid)
 	if !cl.notify.Configured() {
 		return 0, fmt.Errorf("notifications are not configured")
 	}
 	today := store.Today()
 	var lines []string
 	if cl.st.NotifyPlan || force {
-		entries, _ := s.store.ListPlan(ctx, today, today)
+		entries, _ := s.store.ListPlan(ctx, uid, today, today)
 		for _, p := range entries {
 			if p.CookedAt != "" {
 				continue
@@ -377,7 +386,7 @@ func (s *Server) sendDaily(ctx context.Context, force bool) (int, error) {
 	}
 	var expiring []string
 	if cl.st.NotifyExpiry || force {
-		items, _ := s.store.ListPantry(ctx, store.PantryFilter{Expiring: true})
+		items, _ := s.store.ListPantry(ctx, uid, store.PantryFilter{Expiring: true})
 		for _, p := range items {
 			if p.ExpiryDate < today {
 				expiring = append(expiring, p.Name+" (expired "+p.ExpiryDate+")")
@@ -386,7 +395,7 @@ func (s *Server) sendDaily(ctx context.Context, force bool) (int, error) {
 			}
 		}
 	}
-	open := s.store.OpenItemCount(ctx)
+	open := s.store.OpenItemCount(ctx, uid)
 	if len(lines) == 0 && len(expiring) == 0 {
 		return 0, nil
 	}
@@ -426,7 +435,7 @@ func cap1(s string) string {
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	today := store.Today()
-	entries, _ := s.store.ListPlan(ctx, today, store.AddDays(today, 1))
+	entries, _ := s.store.ListPlan(ctx, actorID(ctx), today, store.AddDays(today, 1))
 	var todayTitles, tomorrowTitles []string
 	for _, p := range entries {
 		t := p.DisplayTitle()
@@ -442,18 +451,18 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		return strings.Join(a, " · ")
 	}
-	counts := s.store.Counts(ctx)
-	total, low, expiring := s.store.PantryStats(ctx)
-	month, year, days30 := s.store.CookStats(ctx)
-	spendMonth, _, cur := s.store.SpendStats(ctx)
-	st, _ := s.store.GetSettings(ctx)
+	counts := s.store.CountsFor(ctx, actorID(ctx))
+	total, low, expiring := s.store.PantryStats(ctx, actorID(ctx))
+	month, year, days30 := s.store.CookStats(ctx, actorID(ctx))
+	spendMonth, _, cur := s.store.SpendStats(ctx, actorID(ctx))
+	st, _ := s.store.GetSettings(ctx, actorID(ctx))
 	if cur == "" {
 		cur = st.HomeCurrency
 	}
-	week, _ := s.store.ListPlan(ctx, today, store.AddDays(today, 6))
+	week, _ := s.store.ListPlan(ctx, actorID(ctx), today, store.AddDays(today, 6))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"today": join(todayTitles), "today_count": len(todayTitles), "tomorrow": join(tomorrowTitles),
-		"recipes": counts["recipes"], "shopping_open": s.store.OpenItemCount(ctx), "pantry_total": total, "pantry_low": low, "pantry_expiring": expiring,
+		"recipes": counts["recipes"], "shopping_open": s.store.OpenItemCount(ctx, actorID(ctx)), "pantry_total": total, "pantry_low": low, "pantry_expiring": expiring,
 		"cooked_month": month, "cooked_year": year, "cooked_days_30": days30, "planned_week": len(week),
 		"spend_month": float64(spendMonth) / pow10(currency.Decimals(cur)), "spend_month_text": majorString(spendMonth, cur), "currency": cur,
 	})
@@ -477,30 +486,30 @@ func majorString(minor int64, code string) string {
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	st, _ := s.store.GetSettings(ctx)
+	st, _ := s.store.GetSettings(ctx, actorID(ctx))
 	today := store.Today()
-	week, _ := s.store.ListPlan(ctx, today, store.AddDays(today, 6))
+	week, _ := s.store.ListPlan(ctx, actorID(ctx), today, store.AddDays(today, 6))
 	if week == nil {
 		week = []store.PlanEntry{}
 	}
-	lists, _ := s.store.ListLists(ctx, false)
+	lists, _ := s.store.ListLists(ctx, actorID(ctx), false)
 	if lists == nil {
 		lists = []store.List{}
 	}
-	cooks, _ := s.store.ListCooks(ctx, 0, 6)
+	cooks, _ := s.store.ListCooks(ctx, actorID(ctx), 0, 6)
 	if cooks == nil {
 		cooks = []store.Cook{}
 	}
-	expiring, _ := s.store.ListPantry(ctx, store.PantryFilter{Expiring: true})
+	expiring, _ := s.store.ListPantry(ctx, actorID(ctx), store.PantryFilter{Expiring: true})
 	if expiring == nil {
 		expiring = []store.PantryItem{}
 	}
-	low, _ := s.store.ListPantry(ctx, store.PantryFilter{Low: true})
+	low, _ := s.store.ListPantry(ctx, actorID(ctx), store.PantryFilter{Low: true})
 	if low == nil {
 		low = []store.PantryItem{}
 	}
 	// suggestions: favourites and dishes not cooked for the longest time
-	all, _ := s.store.ListRecipes(ctx, store.RecipeFilter{})
+	all, _ := s.store.ListRecipes(ctx, actorID(ctx), store.RecipeFilter{})
 	type sug struct {
 		store.Recipe
 		Reason string `json:"reason"`
@@ -523,16 +532,16 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	if sugs == nil {
 		sugs = []sug{}
 	}
-	total, lowN, expN := s.store.PantryStats(ctx)
-	month, year, days30 := s.store.CookStats(ctx)
-	spendMonth, spendYear, cur := s.store.SpendStats(ctx)
+	total, lowN, expN := s.store.PantryStats(ctx, actorID(ctx))
+	month, year, days30 := s.store.CookStats(ctx, actorID(ctx))
+	spendMonth, spendYear, cur := s.store.SpendStats(ctx, actorID(ctx))
 	if cur == "" {
 		cur = st.HomeCurrency
 	}
-	counts := s.store.Counts(ctx)
+	counts := s.store.CountsFor(ctx, actorID(ctx))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"today": today, "week": week, "lists": lists, "cooks": cooks, "expiring": expiring, "low": low, "suggestions": sugs,
-		"stats": map[string]any{"recipes": counts["recipes"], "pantry": total, "pantry_low": lowN, "pantry_expiring": expN, "cooked_month": month, "cooked_year": year, "cooked_days_30": days30, "shopping_open": s.store.OpenItemCount(ctx), "spend_month": spendMonth, "spend_year": spendYear, "currency": cur},
+		"stats": map[string]any{"recipes": counts["recipes"], "pantry": total, "pantry_low": lowN, "pantry_expiring": expN, "cooked_month": month, "cooked_year": year, "cooked_days_30": days30, "shopping_open": s.store.OpenItemCount(ctx, actorID(ctx)), "spend_month": spendMonth, "spend_year": spendYear, "currency": cur},
 	})
 }
 
@@ -551,7 +560,7 @@ func (s *Server) handleCookLog(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 {
 		limit = 100
 	}
-	cooks, err := s.store.ListCooks(r.Context(), int64(queryInt(r, "recipe")), limit)
+	cooks, err := s.store.ListCooks(r.Context(), actorID(r.Context()), int64(queryInt(r, "recipe")), limit)
 	if err != nil {
 		s.fail(w, err, "cook log")
 		return
@@ -560,7 +569,7 @@ func (s *Server) handleCookLog(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteCook(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.DeleteCook(r.Context(), idParam(r, "id")); err != nil {
+	if err := s.store.DeleteCook(r.Context(), actorID(r.Context()), idParam(r, "id")); err != nil {
 		s.fail(w, err, "delete cook")
 		return
 	}
@@ -568,7 +577,7 @@ func (s *Server) handleDeleteCook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePurchases(w http.ResponseWriter, r *http.Request) {
-	ps, err := s.store.ListPurchases(r.Context(), 100)
+	ps, err := s.store.ListPurchases(r.Context(), actorID(r.Context()), 100)
 	if err != nil {
 		s.fail(w, err, "purchases")
 		return
@@ -577,7 +586,7 @@ func (s *Server) handlePurchases(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeletePurchase(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.DeletePurchase(r.Context(), idParam(r, "id")); err != nil {
+	if err := s.store.DeletePurchase(r.Context(), actorID(r.Context()), idParam(r, "id")); err != nil {
 		s.fail(w, err, "delete purchase")
 		return
 	}
@@ -604,11 +613,16 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		"core":      s.coreStatus(),
 		"auth_mode": s.cfg.AuthMode, "data_dir": s.cfg.DataDir, "db_path": s.cfg.DBPath, "db_bytes": size, "files_bytes": files,
 		"uptime": time.Since(s.started).Round(time.Second).String(), "timezone": time.Now().Location().String(),
-		"counts": s.store.Counts(r.Context()),
+		"counts": s.store.CountsFor(r.Context(), actorID(r.Context())),
 	})
 }
 
+// handleBackup downloads the whole database, so it is a box operation for an
+// admin only (everyone can export their own data as JSON).
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	dir := filepath.Join(s.cfg.DataDir, "backups")
 	name := fmt.Sprintf("pocket-kitchen-%s.db", time.Now().Format("20060102-150405"))
 	dst := filepath.Join(dir, name)
@@ -621,7 +635,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, dst)
 }
 
-// exportDoc is the JSON backup of everything but users/tokens.
+// exportDoc is the JSON export of one user's kitchen (no users/tokens).
 type exportDoc struct {
 	App       string             `json:"app"`
 	Version   string             `json:"version"`
@@ -638,28 +652,25 @@ type exportDoc struct {
 func (s *Server) handleExportJSON(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	doc := exportDoc{App: "pocket-kitchen", Version: Version, Exported: store.Now()}
-	doc.Recipes, _ = s.store.ListRecipes(ctx, store.RecipeFilter{})
-	arch, _ := s.store.ListRecipes(ctx, store.RecipeFilter{Archived: true})
+	doc.Recipes, _ = s.store.ListRecipes(ctx, actorID(ctx), store.RecipeFilter{})
+	arch, _ := s.store.ListRecipes(ctx, actorID(ctx), store.RecipeFilter{Archived: true})
 	doc.Recipes = append(doc.Recipes, arch...)
-	doc.Plan, _ = s.store.ListPlan(ctx, "0000-01-01", "9999-12-31")
-	doc.Lists, _ = s.store.ListLists(ctx, false)
+	doc.Plan, _ = s.store.ListPlan(ctx, actorID(ctx), "0000-01-01", "9999-12-31")
+	doc.Lists, _ = s.store.ListLists(ctx, actorID(ctx), false)
 	for _, l := range doc.Lists {
-		items, _ := s.store.ListItems(ctx, l.ID)
+		items, _ := s.store.ListItems(ctx, actorID(ctx), l.ID)
 		doc.Items = append(doc.Items, items...)
 	}
-	doc.Pantry, _ = s.store.ListPantry(ctx, store.PantryFilter{})
-	doc.Cooks, _ = s.store.ListCooks(ctx, 0, 100000)
-	doc.Purchases, _ = s.store.ListPurchases(ctx, 100000)
+	doc.Pantry, _ = s.store.ListPantry(ctx, actorID(ctx), store.PantryFilter{})
+	doc.Cooks, _ = s.store.ListCooks(ctx, actorID(ctx), 0, 100000)
+	doc.Purchases, _ = s.store.ListPurchases(ctx, actorID(ctx), 100000)
 	w.Header().Set("Content-Disposition", `attachment; filename="pocket-kitchen-export.json"`)
 	writeJSON(w, http.StatusOK, doc)
 }
 
-// handleImportJSON merges an export: recipes by title, pantry by name,
-// lists by name; plan entries and cooks are added when not already present.
+// handleImportJSON merges an export into the caller's own kitchen: recipes by
+// title, pantry by name, lists by name; plan entries and cooks are added.
 func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
-	}
 	var doc exportDoc
 	if err := decode(r, &doc); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
@@ -669,7 +680,7 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 	uid := actorID(ctx)
 	counts := map[string]int{}
 	recipeIDs := map[int64]int64{}
-	existing, _ := s.store.ListRecipes(ctx, store.RecipeFilter{})
+	existing, _ := s.store.ListRecipes(ctx, actorID(ctx), store.RecipeFilter{})
 	byTitle := map[string]int64{}
 	for _, rc := range existing {
 		byTitle[strings.ToLower(rc.Title)] = rc.ID
@@ -687,23 +698,23 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 		for i := range rc.Ingredients {
 			rc.Ingredients[i].PantryID = 0
 		}
-		if err := s.store.CreateRecipe(ctx, &rc); err == nil {
+		if err := s.store.CreateRecipe(ctx, actorID(ctx), &rc); err == nil {
 			recipeIDs[old] = rc.ID
 			byTitle[strings.ToLower(rc.Title)] = rc.ID
 			counts["recipes"]++
 		}
 	}
 	for _, p := range doc.Pantry {
-		if _, err := s.store.FindPantryByName(ctx, p.Name); err == nil {
+		if _, err := s.store.FindPantryByName(ctx, actorID(ctx), p.Name); err == nil {
 			continue
 		}
 		p.ID, p.InventoryID = 0, nil
-		if err := s.store.CreatePantry(ctx, &p); err == nil {
+		if err := s.store.CreatePantry(ctx, actorID(ctx), &p); err == nil {
 			counts["pantry"]++
 		}
 	}
 	listIDs := map[int64]int64{}
-	lists, _ := s.store.ListLists(ctx, false)
+	lists, _ := s.store.ListLists(ctx, actorID(ctx), false)
 	for _, l := range doc.Lists {
 		found := false
 		for _, ex := range lists {
@@ -715,7 +726,7 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 		if !found {
 			old := l.ID
 			l.ID = 0
-			if err := s.store.CreateList(ctx, &l); err == nil {
+			if err := s.store.CreateList(ctx, actorID(ctx), &l); err == nil {
 				listIDs[old] = l.ID
 				counts["lists"]++
 			}
@@ -726,7 +737,10 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
-		it.ID, it.ListID, it.PlanID, it.PantryID = 0, lid, nil, nil
+		it.ID, it.ListID, it.PlanID, it.PantryID, it.CreatedBy = 0, lid, nil, nil, nil
+		if uid > 0 {
+			it.CreatedBy = &uid
+		}
 		if it.RecipeID != nil {
 			if nid, ok := recipeIDs[*it.RecipeID]; ok {
 				it.RecipeID = &nid
@@ -734,12 +748,15 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 				it.RecipeID = nil
 			}
 		}
-		if err := s.store.CreateItem(ctx, &it); err == nil {
+		if err := s.store.CreateItem(ctx, actorID(ctx), &it); err == nil {
 			counts["items"]++
 		}
 	}
 	for _, p := range doc.Plan {
-		p.ID, p.CookID = 0, nil
+		p.ID, p.CookID, p.CreatedBy = 0, nil, nil
+		if uid > 0 {
+			p.CreatedBy = &uid
+		}
 		if p.RecipeID != nil {
 			if nid, ok := recipeIDs[*p.RecipeID]; ok {
 				p.RecipeID = &nid
@@ -753,7 +770,7 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 		if p.RecipeID == nil && p.Title == "" {
 			continue
 		}
-		if err := s.store.CreatePlan(ctx, &p); err == nil {
+		if err := s.store.CreatePlan(ctx, actorID(ctx), &p); err == nil {
 			counts["plan"]++
 		}
 	}
@@ -766,16 +783,16 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 				c.RecipeID = nil
 			}
 		}
-		if err := s.store.CreateCook(ctx, &c); err == nil {
+		if err := s.store.CreateCook(ctx, actorID(ctx), &c); err == nil {
 			counts["cooks"]++
 			if c.RecipeID != nil {
-				_ = s.store.MarkCooked(ctx, *c.RecipeID, c.Date)
+				_ = s.store.MarkCooked(ctx, actorID(ctx), *c.RecipeID, c.Date)
 			}
 		}
 	}
 	for _, p := range doc.Purchases {
 		p.ID, p.ListID = 0, nil
-		if err := s.store.CreatePurchase(ctx, &p); err == nil {
+		if err := s.store.CreatePurchase(ctx, actorID(ctx), &p); err == nil {
 			counts["purchases"]++
 		}
 	}

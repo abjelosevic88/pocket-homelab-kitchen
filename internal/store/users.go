@@ -69,17 +69,44 @@ func (s *Store) GetUser(ctx context.Context, id int64) (*User, error) {
 	return scanUser(s.DB.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE id = ?`, id))
 }
 
-// DeleteUser removes a user with their sessions and tokens (cascade).
-// Recipes, plan entries and lists are shared by the household and stay.
+// DeleteUser removes a user together with everything they own: their
+// recipes, plan, lists, pantry, cook log, checkouts, settings, sessions and
+// tokens. Content is personal, so nothing is left behind for anyone else.
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
+	for _, q := range []string{
+		`DELETE FROM list_items WHERE user_id = ?`, `DELETE FROM lists WHERE user_id = ?`, `DELETE FROM cooklog WHERE user_id = ?`,
+		`DELETE FROM purchases WHERE user_id = ?`, `DELETE FROM plan WHERE user_id = ?`, `DELETE FROM pantry WHERE user_id = ?`,
+		`DELETE FROM recipes WHERE user_id = ?`, `DELETE FROM user_settings WHERE user_id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, q, id); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		_ = tx.Rollback()
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit()
+}
+
+// OwnerID returns the box owner: the first admin, or the first account.
+func (s *Store) OwnerID(ctx context.Context) int64 {
+	var id int64
+	if err := s.DB.QueryRowContext(ctx, `SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1`).Scan(&id); err == nil {
+		return id
+	}
+	_ = s.DB.QueryRowContext(ctx, `SELECT COALESCE(MIN(id), 0) FROM users`).Scan(&id)
+	return id
 }
 
 // CountAdmins returns how many admin accounts exist.

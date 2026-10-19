@@ -5,11 +5,11 @@ import (
 	"strings"
 )
 
-// ListLists returns shopping lists with open/checked counts.
-func (s *Store) ListLists(ctx context.Context, archived bool) ([]List, error) {
+// ListLists returns the user's shopping lists with open/checked counts.
+func (s *Store) ListLists(ctx context.Context, uid int64, archived bool) ([]List, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT l.id, l.name, l.store, l.sort_order, l.archived, l.created_at,
 		(SELECT COUNT(1) FROM list_items i WHERE i.list_id = l.id AND i.checked = 0), (SELECT COUNT(1) FROM list_items i WHERE i.list_id = l.id AND i.checked = 1)
-		FROM lists l WHERE l.archived = ? ORDER BY l.sort_order, l.id`, boolInt(archived))
+		FROM lists l WHERE l.user_id = ? AND l.archived = ? ORDER BY l.sort_order, l.id`, uid, boolInt(archived))
 	if err != nil {
 		return nil, err
 	}
@@ -27,13 +27,13 @@ func (s *Store) ListLists(ctx context.Context, archived bool) ([]List, error) {
 	return out, rows.Err()
 }
 
-// GetList returns one list.
-func (s *Store) GetList(ctx context.Context, id int64) (*List, error) {
+// GetList returns one of the user's lists.
+func (s *Store) GetList(ctx context.Context, uid, id int64) (*List, error) {
 	var l List
 	var arch int
 	err := s.DB.QueryRowContext(ctx, `SELECT l.id, l.name, l.store, l.sort_order, l.archived, l.created_at,
 		(SELECT COUNT(1) FROM list_items i WHERE i.list_id = l.id AND i.checked = 0), (SELECT COUNT(1) FROM list_items i WHERE i.list_id = l.id AND i.checked = 1)
-		FROM lists l WHERE l.id = ?`, id).Scan(&l.ID, &l.Name, &l.Store, &l.SortOrder, &arch, &l.CreatedAt, &l.Open, &l.Checked)
+		FROM lists l WHERE l.id = ? AND l.user_id = ?`, id, uid).Scan(&l.ID, &l.Name, &l.Store, &l.SortOrder, &arch, &l.CreatedAt, &l.Open, &l.Checked)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -41,9 +41,9 @@ func (s *Store) GetList(ctx context.Context, id int64) (*List, error) {
 	return &l, nil
 }
 
-// DefaultList returns the first open list, creating "Groceries" when none exists.
-func (s *Store) DefaultList(ctx context.Context) (*List, error) {
-	ls, err := s.ListLists(ctx, false)
+// DefaultList returns the user's first open list, creating "Groceries" when none exists.
+func (s *Store) DefaultList(ctx context.Context, uid int64) (*List, error) {
+	ls, err := s.ListLists(ctx, uid, false)
 	if err != nil {
 		return nil, err
 	}
@@ -51,20 +51,23 @@ func (s *Store) DefaultList(ctx context.Context) (*List, error) {
 		return &ls[0], nil
 	}
 	l := &List{Name: "Groceries"}
-	if err := s.CreateList(ctx, l); err != nil {
+	if err := s.CreateList(ctx, uid, l); err != nil {
 		return nil, err
 	}
 	return l, nil
 }
 
-// CreateList inserts a list.
-func (s *Store) CreateList(ctx context.Context, l *List) error {
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO lists (name, store, sort_order) VALUES (?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM lists))`, strings.TrimSpace(l.Name), strings.TrimSpace(l.Store))
+// CreateList inserts a list owned by uid.
+func (s *Store) CreateList(ctx context.Context, uid int64, l *List) error {
+	if uid <= 0 {
+		return ErrNotFound
+	}
+	res, err := s.DB.ExecContext(ctx, `INSERT INTO lists (name, store, sort_order, user_id) VALUES (?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM lists WHERE user_id = ?), ?)`, strings.TrimSpace(l.Name), strings.TrimSpace(l.Store), uid, uid)
 	if err != nil {
 		return err
 	}
 	l.ID, _ = res.LastInsertId()
-	nl, err := s.GetList(ctx, l.ID)
+	nl, err := s.GetList(ctx, uid, l.ID)
 	if err == nil {
 		*l = *nl
 	}
@@ -72,14 +75,20 @@ func (s *Store) CreateList(ctx context.Context, l *List) error {
 }
 
 // UpdateList saves name/store/archived.
-func (s *Store) UpdateList(ctx context.Context, l *List) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE lists SET name = ?, store = ?, archived = ?, sort_order = ? WHERE id = ?`, strings.TrimSpace(l.Name), strings.TrimSpace(l.Store), boolInt(l.Archived), l.SortOrder, l.ID)
-	return err
+func (s *Store) UpdateList(ctx context.Context, uid int64, l *List) error {
+	res, err := s.DB.ExecContext(ctx, `UPDATE lists SET name = ?, store = ?, archived = ?, sort_order = ? WHERE id = ? AND user_id = ?`, strings.TrimSpace(l.Name), strings.TrimSpace(l.Store), boolInt(l.Archived), l.SortOrder, l.ID, uid)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // DeleteList removes a list and its items.
-func (s *Store) DeleteList(ctx context.Context, id int64) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM lists WHERE id = ?`, id)
+func (s *Store) DeleteList(ctx context.Context, uid, id int64) error {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM lists WHERE id = ? AND user_id = ?`, id, uid)
 	if err != nil {
 		return err
 	}
@@ -91,6 +100,8 @@ func (s *Store) DeleteList(ctx context.Context, id int64) error {
 
 const itemCols = `i.id, i.list_id, i.name, i.qty, i.unit, i.note, i.aisle, i.checked, i.recipe_id, i.plan_id, i.pantry_id, i.price, i.currency, i.sort_order, i.created_by, i.created_at, i.updated_at, COALESCE(r.title, '')`
 
+const itemFrom = ` FROM list_items i LEFT JOIN recipes r ON r.id = i.recipe_id AND r.user_id = i.user_id`
+
 func scanItem(row interface{ Scan(...any) error }) (*ListItem, error) {
 	var it ListItem
 	var chk int
@@ -101,9 +112,9 @@ func scanItem(row interface{ Scan(...any) error }) (*ListItem, error) {
 	return &it, nil
 }
 
-// ListItems returns the lines of a list (open first, by aisle, then checked).
-func (s *Store) ListItems(ctx context.Context, listID int64) ([]ListItem, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT `+itemCols+` FROM list_items i LEFT JOIN recipes r ON r.id = i.recipe_id WHERE i.list_id = ? ORDER BY i.checked, i.sort_order, i.id`, listID)
+// ListItems returns the lines of one of the user's lists (open first, by aisle, then checked).
+func (s *Store) ListItems(ctx context.Context, uid, listID int64) ([]ListItem, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+itemCols+itemFrom+` WHERE i.user_id = ? AND i.list_id = ? ORDER BY i.checked, i.sort_order, i.id`, uid, listID)
 	if err != nil {
 		return nil, err
 	}
@@ -119,35 +130,50 @@ func (s *Store) ListItems(ctx context.Context, listID int64) ([]ListItem, error)
 	return out, rows.Err()
 }
 
-// GetItem returns one line.
-func (s *Store) GetItem(ctx context.Context, id int64) (*ListItem, error) {
-	return scanItem(s.DB.QueryRowContext(ctx, `SELECT `+itemCols+` FROM list_items i LEFT JOIN recipes r ON r.id = i.recipe_id WHERE i.id = ?`, id))
+// GetItem returns one of the user's lines.
+func (s *Store) GetItem(ctx context.Context, uid, id int64) (*ListItem, error) {
+	return scanItem(s.DB.QueryRowContext(ctx, `SELECT `+itemCols+itemFrom+` WHERE i.id = ? AND i.user_id = ?`, id, uid))
 }
 
-// CreateItem inserts a line.
-func (s *Store) CreateItem(ctx context.Context, it *ListItem) error {
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO list_items (list_id, name, qty, unit, note, aisle, checked, recipe_id, plan_id, pantry_id, price, currency, sort_order, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM list_items WHERE list_id = ?), ?)`,
-		it.ListID, strings.TrimSpace(it.Name), it.Qty, it.Unit, it.Note, it.Aisle, boolInt(it.Checked), nullI(it.RecipeID), nullI(it.PlanID), nullI(it.PantryID), it.Price, it.Currency, it.ListID, nullI(it.CreatedBy))
+func (s *Store) ownsList(ctx context.Context, uid, listID int64) bool {
+	var n int
+	_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM lists WHERE id = ? AND user_id = ?`, listID, uid).Scan(&n)
+	return n > 0
+}
+
+// CreateItem inserts a line on one of the user's lists.
+func (s *Store) CreateItem(ctx context.Context, uid int64, it *ListItem) error {
+	if uid <= 0 || !s.ownsList(ctx, uid, it.ListID) {
+		return ErrNotFound
+	}
+	res, err := s.DB.ExecContext(ctx, `INSERT INTO list_items (list_id, name, qty, unit, note, aisle, checked, recipe_id, plan_id, pantry_id, price, currency, sort_order, created_by, user_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM list_items WHERE list_id = ?), ?, ?)`,
+		it.ListID, strings.TrimSpace(it.Name), it.Qty, it.Unit, it.Note, it.Aisle, boolInt(it.Checked), nullI(it.RecipeID), nullI(it.PlanID), nullI(it.PantryID), it.Price, it.Currency, it.ListID, nullI(it.CreatedBy), uid)
 	if err != nil {
 		return err
 	}
 	it.ID, _ = res.LastInsertId()
-	ni, err := s.GetItem(ctx, it.ID)
+	ni, err := s.GetItem(ctx, uid, it.ID)
 	if err == nil {
 		*it = *ni
 	}
 	return nil
 }
 
-// UpdateItem saves a line.
-func (s *Store) UpdateItem(ctx context.Context, it *ListItem) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE list_items SET list_id = ?, name = ?, qty = ?, unit = ?, note = ?, aisle = ?, checked = ?, recipe_id = ?, plan_id = ?, pantry_id = ?, price = ?, currency = ?, sort_order = ?, updated_at = ? WHERE id = ?`,
-		it.ListID, strings.TrimSpace(it.Name), it.Qty, it.Unit, it.Note, it.Aisle, boolInt(it.Checked), nullI(it.RecipeID), nullI(it.PlanID), nullI(it.PantryID), it.Price, it.Currency, it.SortOrder, Now(), it.ID)
+// UpdateItem saves a line (it may move to another of the user's lists).
+func (s *Store) UpdateItem(ctx context.Context, uid int64, it *ListItem) error {
+	if !s.ownsList(ctx, uid, it.ListID) {
+		return ErrNotFound
+	}
+	res, err := s.DB.ExecContext(ctx, `UPDATE list_items SET list_id = ?, name = ?, qty = ?, unit = ?, note = ?, aisle = ?, checked = ?, recipe_id = ?, plan_id = ?, pantry_id = ?, price = ?, currency = ?, sort_order = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+		it.ListID, strings.TrimSpace(it.Name), it.Qty, it.Unit, it.Note, it.Aisle, boolInt(it.Checked), nullI(it.RecipeID), nullI(it.PlanID), nullI(it.PantryID), it.Price, it.Currency, it.SortOrder, Now(), it.ID, uid)
 	if err != nil {
 		return err
 	}
-	ni, err := s.GetItem(ctx, it.ID)
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	ni, err := s.GetItem(ctx, uid, it.ID)
 	if err == nil {
 		*it = *ni
 	}
@@ -155,8 +181,8 @@ func (s *Store) UpdateItem(ctx context.Context, it *ListItem) error {
 }
 
 // DeleteItem removes a line.
-func (s *Store) DeleteItem(ctx context.Context, id int64) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM list_items WHERE id = ?`, id)
+func (s *Store) DeleteItem(ctx context.Context, uid, id int64) error {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM list_items WHERE id = ? AND user_id = ?`, id, uid)
 	if err != nil {
 		return err
 	}
@@ -167,8 +193,8 @@ func (s *Store) DeleteItem(ctx context.Context, id int64) error {
 }
 
 // DeleteCheckedItems clears bought lines; returns how many went.
-func (s *Store) DeleteCheckedItems(ctx context.Context, listID int64) (int64, error) {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM list_items WHERE list_id = ? AND checked = 1`, listID)
+func (s *Store) DeleteCheckedItems(ctx context.Context, uid, listID int64) (int64, error) {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM list_items WHERE user_id = ? AND list_id = ? AND checked = 1`, uid, listID)
 	if err != nil {
 		return 0, err
 	}
@@ -176,26 +202,33 @@ func (s *Store) DeleteCheckedItems(ctx context.Context, listID int64) (int64, er
 }
 
 // SetAllChecked checks or unchecks every line.
-func (s *Store) SetAllChecked(ctx context.Context, listID int64, checked bool) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE list_items SET checked = ?, updated_at = ? WHERE list_id = ?`, boolInt(checked), Now(), listID)
+func (s *Store) SetAllChecked(ctx context.Context, uid, listID int64, checked bool) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE list_items SET checked = ?, updated_at = ? WHERE user_id = ? AND list_id = ?`, boolInt(checked), Now(), uid, listID)
 	return err
 }
 
 // FindOpenItem finds an unchecked line with the same name and unit family for merging.
-func (s *Store) FindOpenItem(ctx context.Context, listID int64, name, unit string) (*ListItem, error) {
-	return scanItem(s.DB.QueryRowContext(ctx, `SELECT `+itemCols+` FROM list_items i LEFT JOIN recipes r ON r.id = i.recipe_id WHERE i.list_id = ? AND i.checked = 0 AND LOWER(i.name) = ? AND i.unit = ? ORDER BY i.id LIMIT 1`, listID, strings.ToLower(strings.TrimSpace(name)), unit))
+func (s *Store) FindOpenItem(ctx context.Context, uid, listID int64, name, unit string) (*ListItem, error) {
+	return scanItem(s.DB.QueryRowContext(ctx, `SELECT `+itemCols+itemFrom+` WHERE i.user_id = ? AND i.list_id = ? AND i.checked = 0 AND LOWER(i.name) = ? AND i.unit = ? ORDER BY i.id LIMIT 1`, uid, listID, strings.ToLower(strings.TrimSpace(name)), unit))
 }
 
-// OpenItemCount counts unchecked lines across all open lists.
-func (s *Store) OpenItemCount(ctx context.Context) int {
+// OpenItemCount counts unchecked lines across the user's open lists.
+func (s *Store) OpenItemCount(ctx context.Context, uid int64) int {
+	var n int
+	_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM list_items i JOIN lists l ON l.id = i.list_id WHERE i.user_id = ? AND l.archived = 0 AND i.checked = 0`, uid).Scan(&n)
+	return n
+}
+
+// OpenItemCountAll counts unchecked lines on every open list (box-wide metrics only).
+func (s *Store) OpenItemCountAll(ctx context.Context) int {
 	var n int
 	_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM list_items i JOIN lists l ON l.id = i.list_id WHERE l.archived = 0 AND i.checked = 0`).Scan(&n)
 	return n
 }
 
-// ItemNameSuggestions returns names used before (lists + pantry + ingredients) for autocomplete.
-func (s *Store) ItemNameSuggestions(ctx context.Context, limit int) ([]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT name FROM (SELECT name, MAX(created_at) AS t FROM list_items GROUP BY LOWER(name) UNION ALL SELECT name, updated_at FROM pantry WHERE archived = 0) ORDER BY t DESC LIMIT ?`, limit)
+// ItemNameSuggestions returns names the user used before (lists + pantry) for autocomplete.
+func (s *Store) ItemNameSuggestions(ctx context.Context, uid int64, limit int) ([]string, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT name FROM (SELECT name, MAX(created_at) AS t FROM list_items WHERE user_id = ? GROUP BY LOWER(name) UNION ALL SELECT name, updated_at FROM pantry WHERE user_id = ? AND archived = 0) ORDER BY t DESC LIMIT ?`, uid, uid, limit)
 	if err != nil {
 		return nil, err
 	}

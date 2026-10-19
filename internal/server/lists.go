@@ -12,7 +12,7 @@ import (
 )
 
 func (s *Server) handleListLists(w http.ResponseWriter, r *http.Request) {
-	ls, err := s.store.ListLists(r.Context(), queryBool(r, "archived"))
+	ls, err := s.store.ListLists(r.Context(), actorID(r.Context()), queryBool(r, "archived"))
 	if err != nil {
 		s.fail(w, err, "lists")
 		return
@@ -30,7 +30,7 @@ func (s *Server) handleCreateList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l := &store.List{Name: in.Name, Store: in.Store}
-	if err := s.store.CreateList(r.Context(), l); err != nil {
+	if err := s.store.CreateList(r.Context(), actorID(r.Context()), l); err != nil {
 		s.fail(w, err, "create list")
 		return
 	}
@@ -38,12 +38,12 @@ func (s *Server) handleCreateList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetList(w http.ResponseWriter, r *http.Request) {
-	l, err := s.store.GetList(r.Context(), idParam(r, "id"))
+	l, err := s.store.GetList(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get list")
 		return
 	}
-	items, err := s.store.ListItems(r.Context(), l.ID)
+	items, err := s.store.ListItems(r.Context(), actorID(r.Context()), l.ID)
 	if err != nil {
 		s.fail(w, err, "items")
 		return
@@ -52,7 +52,7 @@ func (s *Server) handleGetList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateList(w http.ResponseWriter, r *http.Request) {
-	l, err := s.store.GetList(r.Context(), idParam(r, "id"))
+	l, err := s.store.GetList(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get list")
 		return
@@ -75,16 +75,16 @@ func (s *Server) handleUpdateList(w http.ResponseWriter, r *http.Request) {
 	if in.Archived != nil {
 		l.Archived = *in.Archived
 	}
-	if err := s.store.UpdateList(r.Context(), l); err != nil {
+	if err := s.store.UpdateList(r.Context(), actorID(r.Context()), l); err != nil {
 		s.fail(w, err, "update list")
 		return
 	}
-	l, _ = s.store.GetList(r.Context(), l.ID)
+	l, _ = s.store.GetList(r.Context(), actorID(r.Context()), l.ID)
 	writeJSON(w, http.StatusOK, l)
 }
 
 func (s *Server) handleDeleteList(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.DeleteList(r.Context(), idParam(r, "id")); err != nil {
+	if err := s.store.DeleteList(r.Context(), actorID(r.Context()), idParam(r, "id")); err != nil {
 		s.fail(w, err, "delete list")
 		return
 	}
@@ -150,7 +150,7 @@ func applyItem(it *store.ListItem, in itemInput) string {
 
 // handleCreateItem adds a line; a plain string body {"name":"milk 2 l"} is parsed like an ingredient.
 func (s *Server) handleCreateItem(w http.ResponseWriter, r *http.Request) {
-	l, err := s.store.GetList(r.Context(), idParam(r, "id"))
+	l, err := s.store.GetList(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get list")
 		return
@@ -173,12 +173,13 @@ func (s *Server) handleCreateItem(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
+	s.ownPantryRef(r, it)
 	if it.PantryID == nil {
-		if p, err := s.store.FindPantryByName(r.Context(), it.Name); err == nil {
+		if p, err := s.store.FindPantryByName(r.Context(), actorID(r.Context()), it.Name); err == nil {
 			it.PantryID = &p.ID
 		}
 	}
-	if err := s.store.CreateItem(r.Context(), it); err != nil {
+	if err := s.store.CreateItem(r.Context(), actorID(r.Context()), it); err != nil {
 		s.fail(w, err, "create item")
 		return
 	}
@@ -252,8 +253,18 @@ func numUnit(tok string) (float64, string, bool) {
 	return q, units.Normalize(u), true
 }
 
+// ownPantryRef drops a pantry_id from the request that is not one of the
+// caller's own pantry rows.
+func (s *Server) ownPantryRef(r *http.Request, it *store.ListItem) {
+	if it.PantryID != nil {
+		if _, err := s.store.GetPantry(r.Context(), actorID(r.Context()), *it.PantryID); err != nil {
+			it.PantryID = nil
+		}
+	}
+}
+
 func (s *Server) getListItem(w http.ResponseWriter, r *http.Request) *store.ListItem {
-	it, err := s.store.GetItem(r.Context(), idParam(r, "iid"))
+	it, err := s.store.GetItem(r.Context(), actorID(r.Context()), idParam(r, "iid"))
 	if err != nil || it.ListID != idParam(r, "id") {
 		writeErr(w, http.StatusNotFound, "not found")
 		return nil
@@ -275,7 +286,8 @@ func (s *Server) handleUpdateItem(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	if err := s.store.UpdateItem(r.Context(), it); err != nil {
+	s.ownPantryRef(r, it)
+	if err := s.store.UpdateItem(r.Context(), actorID(r.Context()), it); err != nil {
 		s.fail(w, err, "update item")
 		return
 	}
@@ -287,7 +299,7 @@ func (s *Server) handleDeleteItem(w http.ResponseWriter, r *http.Request) {
 	if it == nil {
 		return
 	}
-	if err := s.store.DeleteItem(r.Context(), it.ID); err != nil {
+	if err := s.store.DeleteItem(r.Context(), actorID(r.Context()), it.ID); err != nil {
 		s.fail(w, err, "delete item")
 		return
 	}
@@ -300,7 +312,7 @@ func (s *Server) handleToggleItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it.Checked = !it.Checked
-	if err := s.store.UpdateItem(r.Context(), it); err != nil {
+	if err := s.store.UpdateItem(r.Context(), actorID(r.Context()), it); err != nil {
 		s.fail(w, err, "update item")
 		return
 	}
@@ -308,36 +320,44 @@ func (s *Server) handleToggleItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCheckAll(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.store.GetList(r.Context(), actorID(r.Context()), idParam(r, "id")); err != nil {
+		s.fail(w, err, "get list")
+		return
+	}
 	var in struct {
 		Checked bool `json:"checked"`
 	}
 	_ = decode(r, &in)
-	if err := s.store.SetAllChecked(r.Context(), idParam(r, "id"), in.Checked); err != nil {
+	if err := s.store.SetAllChecked(r.Context(), actorID(r.Context()), idParam(r, "id"), in.Checked); err != nil {
 		s.fail(w, err, "check all")
 		return
 	}
-	l, _ := s.store.GetList(r.Context(), idParam(r, "id"))
+	l, _ := s.store.GetList(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	writeJSON(w, http.StatusOK, l)
 }
 
 func (s *Server) handleClearChecked(w http.ResponseWriter, r *http.Request) {
-	n, err := s.store.DeleteCheckedItems(r.Context(), idParam(r, "id"))
+	if _, err := s.store.GetList(r.Context(), actorID(r.Context()), idParam(r, "id")); err != nil {
+		s.fail(w, err, "get list")
+		return
+	}
+	n, err := s.store.DeleteCheckedItems(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "clear")
 		return
 	}
-	l, _ := s.store.GetList(r.Context(), idParam(r, "id"))
+	l, _ := s.store.GetList(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	writeJSON(w, http.StatusOK, map[string]any{"removed": n, "list": l})
 }
 
 // handleAddLowPantry puts every low / empty pantry item on the list.
 func (s *Server) handleAddLowPantry(w http.ResponseWriter, r *http.Request) {
-	l, err := s.store.GetList(r.Context(), idParam(r, "id"))
+	l, err := s.store.GetList(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get list")
 		return
 	}
-	low, err := s.store.ListPantry(r.Context(), store.PantryFilter{Low: true})
+	low, err := s.store.ListPantry(r.Context(), actorID(r.Context()), store.PantryFilter{Low: true})
 	if err != nil {
 		s.fail(w, err, "pantry")
 		return
@@ -354,12 +374,12 @@ func (s *Server) handleAddLowPantry(w http.ResponseWriter, r *http.Request) {
 			n++
 		}
 	}
-	l, _ = s.store.GetList(r.Context(), l.ID)
+	l, _ = s.store.GetList(r.Context(), actorID(r.Context()), l.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"added": n, "list": l})
 }
 
 func (s *Server) handleSuggestItems(w http.ResponseWriter, r *http.Request) {
-	names, err := s.store.ItemNameSuggestions(r.Context(), 300)
+	names, err := s.store.ItemNameSuggestions(r.Context(), actorID(r.Context()), 300)
 	if err != nil {
 		s.fail(w, err, "suggest")
 		return
@@ -411,7 +431,7 @@ type checkoutResult struct {
 // Inventory when connected), post the receipt to Pocket Split, remember it.
 func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	l, err := s.store.GetList(ctx, idParam(r, "id"))
+	l, err := s.store.GetList(ctx, actorID(ctx), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get list")
 		return
@@ -428,7 +448,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "date must be YYYY-MM-DD")
 		return
 	}
-	cl := s.clients(ctx)
+	cl := s.clients(ctx, actorID(ctx))
 	in.Currency = strings.ToUpper(strings.TrimSpace(in.Currency))
 	if in.Currency == "" {
 		in.Currency = cl.st.HomeCurrency
@@ -437,7 +457,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "amount must be positive with a known currency")
 		return
 	}
-	items, err := s.store.ListItems(ctx, l.ID)
+	items, err := s.store.ListItems(ctx, actorID(ctx), l.ID)
 	if err != nil {
 		s.fail(w, err, "items")
 		return
@@ -529,17 +549,17 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if err := s.store.CreatePurchase(ctx, p); err != nil {
+	if err := s.store.CreatePurchase(ctx, actorID(ctx), p); err != nil {
 		s.fail(w, err, "save purchase")
 		return
 	}
 	if in.Remove == nil || *in.Remove {
-		_, _ = s.store.DeleteCheckedItems(ctx, l.ID)
+		_, _ = s.store.DeleteCheckedItems(ctx, actorID(ctx), l.ID)
 	}
 	res.Purchase = *p
-	res.List, _ = s.store.GetList(ctx, l.ID)
+	res.List, _ = s.store.GetList(ctx, actorID(ctx), l.ID)
 	s.publish("kitchen.checkout", fmt.Sprintf("list:%d", l.ID), map[string]any{
-		"list_id": l.ID, "list": l.Name, "amount": in.Amount, "currency": in.Currency, "date": in.Date, "store": in.Store,
+		"user_email": userFrom(ctx).Email, "list_id": l.ID, "list": l.Name, "amount": in.Amount, "currency": in.Currency, "date": in.Date, "store": in.Store,
 	})
 	writeJSON(w, http.StatusOK, res)
 }
@@ -551,10 +571,10 @@ func (s *Server) restockItem(r *http.Request, cl clients, it store.ListItem) (st
 	var p *store.PantryItem
 	var err error
 	if it.PantryID != nil {
-		p, err = s.store.GetPantry(ctx, *it.PantryID)
+		p, err = s.store.GetPantry(ctx, actorID(ctx), *it.PantryID)
 	}
 	if p == nil || err != nil {
-		p, err = s.store.FindPantryByName(ctx, it.Name)
+		p, err = s.store.FindPantryByName(ctx, actorID(ctx), it.Name)
 	}
 	qty := it.Qty
 	if qty <= 0 {

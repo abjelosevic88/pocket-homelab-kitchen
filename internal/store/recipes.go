@@ -45,9 +45,9 @@ type RecipeFilter struct {
 }
 
 // ListRecipes returns recipes matching the filter.
-func (s *Store) ListRecipes(ctx context.Context, f RecipeFilter) ([]Recipe, error) {
-	where := []string{"archived = ?"}
-	args := []any{boolInt(f.Archived)}
+func (s *Store) ListRecipes(ctx context.Context, uid int64, f RecipeFilter) ([]Recipe, error) {
+	where := []string{"user_id = ?", "archived = ?"}
+	args := []any{uid, boolInt(f.Archived)}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		like := "%" + strings.ToLower(q) + "%"
 		where = append(where, `(LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(tags) LIKE ? OR LOWER(ingredients) LIKE ? OR LOWER(cuisine) LIKE ?)`)
@@ -103,9 +103,9 @@ func (s *Store) ListRecipes(ctx context.Context, f RecipeFilter) ([]Recipe, erro
 	return out, rows.Err()
 }
 
-// GetRecipe returns one recipe.
-func (s *Store) GetRecipe(ctx context.Context, id int64) (*Recipe, error) {
-	return scanRecipe(s.DB.QueryRowContext(ctx, `SELECT `+recipeCols+` FROM recipes WHERE id = ?`, id))
+// GetRecipe returns one of the user's recipes.
+func (s *Store) GetRecipe(ctx context.Context, uid, id int64) (*Recipe, error) {
+	return scanRecipe(s.DB.QueryRowContext(ctx, `SELECT `+recipeCols+` FROM recipes WHERE id = ? AND user_id = ?`, id, uid))
 }
 
 func jsonStr(v any) string {
@@ -113,8 +113,11 @@ func jsonStr(v any) string {
 	return string(b)
 }
 
-// CreateRecipe inserts a recipe.
-func (s *Store) CreateRecipe(ctx context.Context, r *Recipe) error {
+// CreateRecipe inserts a recipe owned by uid.
+func (s *Store) CreateRecipe(ctx context.Context, uid int64, r *Recipe) error {
+	if uid <= 0 {
+		return ErrNotFound
+	}
 	if r.Ingredients == nil {
 		r.Ingredients = []Ingredient{}
 	}
@@ -124,15 +127,15 @@ func (s *Store) CreateRecipe(ctx context.Context, r *Recipe) error {
 	if r.Nutrition == nil {
 		r.Nutrition = map[string]string{}
 	}
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO recipes (title, description, servings, prep_minutes, cook_minutes, course, cuisine, tags, source_url, source_name, rating, favorite, notes, photo_path, image_url, ingredients, steps, nutrition, times_cooked, last_cooked, archived, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	res, err := s.DB.ExecContext(ctx, `INSERT INTO recipes (title, description, servings, prep_minutes, cook_minutes, course, cuisine, tags, source_url, source_name, rating, favorite, notes, photo_path, image_url, ingredients, steps, nutrition, times_cooked, last_cooked, archived, created_by, user_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.Title, r.Description, r.Servings, r.PrepMinutes, r.CookMinutes, r.Course, r.Cuisine, r.Tags, r.SourceURL, r.SourceName, r.Rating, boolInt(r.Favorite), r.Notes, r.PhotoPath, r.ImageURL,
-		jsonStr(r.Ingredients), jsonStr(r.Steps), jsonStr(r.Nutrition), r.TimesCooked, r.LastCooked, boolInt(r.Archived), nullI(r.CreatedBy))
+		jsonStr(r.Ingredients), jsonStr(r.Steps), jsonStr(r.Nutrition), r.TimesCooked, r.LastCooked, boolInt(r.Archived), nullI(r.CreatedBy), uid)
 	if err != nil {
 		return err
 	}
 	r.ID, _ = res.LastInsertId()
-	nr, err := s.GetRecipe(ctx, r.ID)
+	nr, err := s.GetRecipe(ctx, uid, r.ID)
 	if err == nil {
 		*r = *nr
 	}
@@ -140,14 +143,17 @@ func (s *Store) CreateRecipe(ctx context.Context, r *Recipe) error {
 }
 
 // UpdateRecipe saves every field.
-func (s *Store) UpdateRecipe(ctx context.Context, r *Recipe) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE recipes SET title = ?, description = ?, servings = ?, prep_minutes = ?, cook_minutes = ?, course = ?, cuisine = ?, tags = ?, source_url = ?, source_name = ?, rating = ?, favorite = ?, notes = ?, photo_path = ?, image_url = ?, ingredients = ?, steps = ?, nutrition = ?, times_cooked = ?, last_cooked = ?, archived = ?, updated_at = ? WHERE id = ?`,
+func (s *Store) UpdateRecipe(ctx context.Context, uid int64, r *Recipe) error {
+	res, err := s.DB.ExecContext(ctx, `UPDATE recipes SET title = ?, description = ?, servings = ?, prep_minutes = ?, cook_minutes = ?, course = ?, cuisine = ?, tags = ?, source_url = ?, source_name = ?, rating = ?, favorite = ?, notes = ?, photo_path = ?, image_url = ?, ingredients = ?, steps = ?, nutrition = ?, times_cooked = ?, last_cooked = ?, archived = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
 		r.Title, r.Description, r.Servings, r.PrepMinutes, r.CookMinutes, r.Course, r.Cuisine, r.Tags, r.SourceURL, r.SourceName, r.Rating, boolInt(r.Favorite), r.Notes, r.PhotoPath, r.ImageURL,
-		jsonStr(r.Ingredients), jsonStr(r.Steps), jsonStr(r.Nutrition), r.TimesCooked, r.LastCooked, boolInt(r.Archived), Now(), r.ID)
+		jsonStr(r.Ingredients), jsonStr(r.Steps), jsonStr(r.Nutrition), r.TimesCooked, r.LastCooked, boolInt(r.Archived), Now(), r.ID, uid)
 	if err != nil {
 		return err
 	}
-	nr, err := s.GetRecipe(ctx, r.ID)
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	nr, err := s.GetRecipe(ctx, uid, r.ID)
 	if err == nil {
 		*r = *nr
 	}
@@ -155,8 +161,8 @@ func (s *Store) UpdateRecipe(ctx context.Context, r *Recipe) error {
 }
 
 // DeleteRecipe removes a recipe.
-func (s *Store) DeleteRecipe(ctx context.Context, id int64) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM recipes WHERE id = ?`, id)
+func (s *Store) DeleteRecipe(ctx context.Context, uid, id int64) error {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM recipes WHERE id = ? AND user_id = ?`, id, uid)
 	if err != nil {
 		return err
 	}
@@ -167,14 +173,31 @@ func (s *Store) DeleteRecipe(ctx context.Context, id int64) error {
 }
 
 // MarkCooked bumps the counter and last-cooked date.
-func (s *Store) MarkCooked(ctx context.Context, id int64, date string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE recipes SET times_cooked = times_cooked + 1, last_cooked = CASE WHEN last_cooked < ? THEN ? ELSE last_cooked END, updated_at = ? WHERE id = ?`, date, date, Now(), id)
+func (s *Store) MarkCooked(ctx context.Context, uid, id int64, date string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE recipes SET times_cooked = times_cooked + 1, last_cooked = CASE WHEN last_cooked < ? THEN ? ELSE last_cooked END, updated_at = ? WHERE id = ? AND user_id = ?`, date, date, Now(), id, uid)
 	return err
 }
 
+// RecipePhotoPaths returns the stored photo paths of a user's recipes (to clean up files).
+func (s *Store) RecipePhotoPaths(ctx context.Context, uid int64) []string {
+	rows, err := s.DB.QueryContext(ctx, `SELECT photo_path FROM recipes WHERE user_id = ? AND photo_path <> ''`, uid)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if rows.Scan(&p) == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // RecipeFacets returns the distinct tags, cuisines and courses in use.
-func (s *Store) RecipeFacets(ctx context.Context) (tags, cuisines []string, courses map[string]int, err error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT tags, cuisine, course FROM recipes WHERE archived = 0`)
+func (s *Store) RecipeFacets(ctx context.Context, uid int64) (tags, cuisines []string, courses map[string]int, err error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT tags, cuisine, course FROM recipes WHERE user_id = ? AND archived = 0`, uid)
 	if err != nil {
 		return nil, nil, nil, err
 	}

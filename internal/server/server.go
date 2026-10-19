@@ -45,8 +45,8 @@ type Server struct {
 	off      *foodfacts.Client
 
 	syncMu    sync.Mutex
-	syncing   bool
-	notifyDay string
+	syncing   map[int64]bool   // per user: a pantry sync is running
+	notifyDay map[int64]string // per user: the day the daily push went out
 
 	oidcMu sync.Mutex
 	oidc   *oidcProvider // for the issuer in use; rebuilt when it changes
@@ -65,13 +65,16 @@ type resolvedURL struct {
 
 // New creates a server.
 func New(cfg *config.Config, st *store.Store, log *slog.Logger, webFS fs.FS) *Server {
+	if cfg.DefaultCurrency != "" {
+		st.DefaultCurrency = cfg.DefaultCurrency
+	}
 	return &Server{cfg: cfg, store: st, log: log, webFS: webFS, started: time.Now(), off: foodfacts.New(cfg.UserAgent), oidc: &oidcProvider{},
 		core:     core.New(cfg.CoreURL, core.Options{TokenFile: cfg.DataDir + "/core.token", UserAgent: cfg.UserAgent}),
-		resolved: map[string]resolvedURL{}}
+		resolved: map[string]resolvedURL{}, syncing: map[int64]bool{}, notifyDay: map[int64]string{}}
 }
 
-// Bootstrap seeds the first admin (if configured), integration defaults, the
-// default shopping list and demo data, then starts the background work.
+// Bootstrap seeds the first admin (if configured), the owner's integration
+// settings from the environment and demo data, then starts the background work.
 func (s *Server) Bootstrap(ctx context.Context) error {
 	if err := os.MkdirAll(s.cfg.FilesDir, 0o755); err != nil {
 		return fmt.Errorf("files dir: %w", err)
@@ -89,14 +92,43 @@ func (s *Server) Bootstrap(ctx context.Context) error {
 		if err := s.store.CreateUser(ctx, u); err != nil {
 			return err
 		}
-		st, _ := s.store.GetSettings(ctx)
+		st, _ := s.store.GetSettings(ctx, 0)
 		st.SetupComplete = true
-		if err := s.store.SaveSettings(ctx, st); err != nil {
+		if err := s.store.SaveBoxSettings(ctx, st); err != nil {
 			return err
 		}
 		s.log.Info("admin user created from environment", "email", u.Email)
 	}
-	st, err := s.store.GetSettings(ctx)
+	box, err := s.store.GetSettings(ctx, 0)
+	if err != nil {
+		return err
+	}
+	if !s.cfg.FoodFactsEnabled && box.FoodFacts {
+		box.FoodFacts = false
+		if err := s.store.SaveBoxSettings(ctx, box); err != nil {
+			return err
+		}
+	}
+	if owner := s.store.OwnerID(ctx); owner > 0 {
+		if err := s.ownerReady(ctx, owner); err != nil {
+			return err
+		}
+	}
+	_ = s.store.PurgeSessions(ctx)
+	go s.janitor(ctx)
+	if s.core.Configured() {
+		go s.coreLoop(ctx)
+	}
+	return nil
+}
+
+// ownerReady runs once the box owner (the first admin) exists: the integration
+// settings from the environment (Inventory / Split / Habits tokens and ids, the
+// Apprise route) are the owner's — they are seeded into the owner's personal
+// settings only, never into anyone else's — and demo data lands in the owner's
+// kitchen.
+func (s *Server) ownerReady(ctx context.Context, owner int64) error {
+	st, err := s.store.GetSettings(ctx, owner)
 	if err != nil {
 		return err
 	}
@@ -115,7 +147,7 @@ func (s *Server) Bootstrap(ctx context.Context) error {
 	set(&st.SplitPublicURL, s.cfg.SplitPublicURL)
 	set(&st.HabitsURL, s.cfg.HabitsURL)
 	set(&st.HabitsToken, s.cfg.HabitsToken)
-	if s.cfg.InventoryTag != "pantry" && st.InventoryTag == "pantry" {
+	if s.cfg.InventoryTag != "" && s.cfg.InventoryTag != "pantry" && st.InventoryTag == "pantry" {
 		st.InventoryTag = s.cfg.InventoryTag
 		changed = true
 	}
@@ -135,31 +167,15 @@ func (s *Server) Bootstrap(ctx context.Context) error {
 		st.NotifyHour = s.cfg.NotifyHour
 		changed = true
 	}
-	if st.HomeCurrency == "EUR" && s.cfg.DefaultCurrency != "EUR" {
-		st.HomeCurrency = s.cfg.DefaultCurrency
-		changed = true
-	}
-	if !s.cfg.FoodFactsEnabled && st.FoodFacts {
-		st.FoodFacts = false
-		changed = true
-	}
 	if changed {
-		if err := s.store.SaveSettings(ctx, st); err != nil {
+		if err := s.store.SaveUserSettings(ctx, owner, st); err != nil {
 			return err
 		}
-	}
-	if _, err := s.store.DefaultList(ctx); err != nil {
-		return err
 	}
 	if s.cfg.DemoData {
-		if err := s.seedDemo(ctx); err != nil {
+		if err := s.seedDemo(ctx, owner); err != nil {
 			return err
 		}
-	}
-	_ = s.store.PurgeSessions(ctx)
-	go s.janitor(ctx)
-	if s.core.Configured() {
-		go s.coreLoop(ctx)
 	}
 	return nil
 }
@@ -184,36 +200,55 @@ func (s *Server) janitor(ctx context.Context) {
 	}
 }
 
+// autoSync pulls the pantry for every user who connected their own Pocket
+// Inventory, each with their own token into their own pantry.
 func (s *Server) autoSync(ctx context.Context) {
-	st, _ := s.store.GetSettings(ctx)
-	if !st.InventoryAutoSync || st.InventoryURL == "" || st.InventoryToken == "" {
+	uids, err := s.store.SettingsUsers(ctx)
+	if err != nil {
+		s.log.Warn("pantry sync: users", "err", err)
 		return
 	}
-	if _, err := s.syncPantry(ctx); err != nil {
-		s.log.Warn("pantry sync", "err", err)
+	for _, uid := range uids {
+		st, _ := s.store.GetSettings(ctx, uid)
+		if !st.InventoryAutoSync || st.InventoryToken == "" {
+			continue
+		}
+		if _, err := s.syncPantry(ctx, uid); err != nil {
+			s.log.Warn("pantry sync", "user", uid, "err", err)
+		}
 	}
 }
 
-// maybeNotify sends the daily message once per day once the hour has passed.
+// maybeNotify sends each user's daily message (to their own notification URL)
+// once per day once their hour has passed.
 func (s *Server) maybeNotify(ctx context.Context) {
-	st, _ := s.store.GetSettings(ctx)
-	if st.NotifyURL == "" || (!st.NotifyPlan && !st.NotifyExpiry) {
+	uids, err := s.store.SettingsUsers(ctx)
+	if err != nil {
 		return
 	}
 	now := time.Now()
 	day := now.Format("2006-01-02")
-	if s.notifyDay == "" {
-		if v, _, ok := s.store.CacheGet(ctx, "notify:last_day"); ok {
-			s.notifyDay = v
+	for _, uid := range uids {
+		st, _ := s.store.GetSettings(ctx, uid)
+		if st.NotifyURL == "" || (!st.NotifyPlan && !st.NotifyExpiry) {
+			continue
 		}
-	}
-	if s.notifyDay == day || now.Hour() < st.NotifyHour {
-		return
-	}
-	s.notifyDay = day
-	_ = s.store.CachePut(ctx, "notify:last_day", day)
-	if _, err := s.sendDaily(ctx, false); err != nil {
-		s.log.Warn("daily notification", "err", err)
+		key := fmt.Sprintf("notify:last_day:%d", uid)
+		last := s.notifyDay[uid]
+		if last == "" {
+			if v, _, ok := s.store.CacheGet(ctx, key); ok {
+				last = v
+			}
+		}
+		if last == day || now.Hour() < st.NotifyHour {
+			s.notifyDay[uid] = last
+			continue
+		}
+		s.notifyDay[uid] = day
+		_ = s.store.CachePut(ctx, key, day)
+		if _, err := s.sendDaily(ctx, uid, false); err != nil {
+			s.log.Warn("daily notification", "user", uid, "err", err)
+		}
 	}
 }
 
@@ -227,8 +262,11 @@ type clients struct {
 	notify    *notify.Client
 }
 
-func (s *Server) clients(ctx context.Context) clients {
-	st, _ := s.store.GetSettings(ctx)
+// clients builds the integration clients from ONE user's own settings: a
+// member who has not connected Inventory / Split / Habits gets unconfigured
+// clients, never the owner's tokens.
+func (s *Server) clients(ctx context.Context, uid int64) clients {
+	st, _ := s.store.GetSettings(ctx, uid)
 	if st.InventoryURL == "" && st.InventoryToken != "" {
 		st.InventoryURL = s.resolveSibling(ctx, "inventory")
 	}
@@ -576,7 +614,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	for k, v := range counts {
 		fmt.Fprintf(w, "pocket_kitchen_rows{table=%q} %d\n", k, v)
 	}
-	fmt.Fprintf(w, "# HELP pocket_kitchen_shopping_open Unchecked shopping lines.\n# TYPE pocket_kitchen_shopping_open gauge\npocket_kitchen_shopping_open %d\n", s.store.OpenItemCount(ctx))
+	fmt.Fprintf(w, "# HELP pocket_kitchen_shopping_open Unchecked shopping lines.\n# TYPE pocket_kitchen_shopping_open gauge\npocket_kitchen_shopping_open %d\n", s.store.OpenItemCountAll(ctx))
 }
 
 // ---------- static / SPA ----------

@@ -55,7 +55,7 @@ Nothing on my server did recipes, a meal plan or a shopping list, and every app 
 | **Pantry** | Mirrors Pocket Inventory items with the pantry tag (every 30 min + on demand) or stands alone; quantity, unit, minimum (low), location, category, barcode, brand, best-before (expiring), notes; −/+ steppers; ingredient-name matching with plurals and descriptors (“large eggs” → Eggs). |
 | **Cooking** | Cook log with servings, notes and rating; pantry deduction with unit conversion (g/kg, ml/l/tsp/tbsp/cup); Pocket Habits mark; stats (cooked this month, days cooked out of 30). |
 | **Integrations** | Pocket Inventory, Pocket Split, Pocket Habits, Open Food Facts, Apprise / ntfy / webhook, Homepage dashboard endpoint, Prometheus `/metrics`. With **Pocket Core** on the box: registers itself, publishes `kitchen.cooked` and `kitchen.checkout`, accepts paired-phone tokens, finds its siblings without `*_URL` settings, and offers “Sign in with Pocket Core” on the login page with no configuration (any other OpenID Connect provider via `OIDC_*`). |
-| **Users & ops** | Built-in login (admin/member), SSO-proxy header, or no login on a trusted LAN. API tokens. SQLite backup from the UI/CLI/API, JSON export / merge-import. PWA with shortcuts for the list, the plan and the scanner. |
+| **Users & ops** | Built-in login (admin/member), SSO-proxy header, or no login on a trusted LAN. Every account has its own kitchen — recipes, plan, lists, pantry, history and integrations are per person; admins manage accounts, not other people's data. API tokens. SQLite backup from the UI/CLI/API, JSON export / merge-import. PWA with shortcuts for the list, the plan and the scanner. |
 
 ## Run it
 
@@ -78,7 +78,7 @@ Want to look around first? `DEMO_DATA=true AUTH_MODE=none` seeds eight recipes, 
 
 ### Integrations
 
-All optional, all under **Settings → Integrations** (or environment variables, see [docs/configuration.md](docs/configuration.md)):
+All optional, all under **Settings → Integrations**, and per person: each account connects its own Inventory / Split / Habits with its own tokens. The environment variables (see [docs/configuration.md](docs/configuration.md)) seed the first admin's (the owner's) connections only:
 
 - **Pocket Inventory** — URL + API token; pick the tag that marks pantry items and a default location for groceries the kitchen creates.
 - **Pocket Split** — URL + API token; pick the household group, who usually pays and the category.

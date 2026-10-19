@@ -17,7 +17,7 @@ func recipeFilter(r *http.Request) store.RecipeFilter {
 }
 
 func (s *Server) handleListRecipes(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.ListRecipes(r.Context(), recipeFilter(r))
+	list, err := s.store.ListRecipes(r.Context(), actorID(r.Context()), recipeFilter(r))
 	if err != nil {
 		s.fail(w, err, "list recipes")
 		return
@@ -26,7 +26,7 @@ func (s *Server) handleListRecipes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRecipeFacets(w http.ResponseWriter, r *http.Request) {
-	tags, cuisines, courses, err := s.store.RecipeFacets(r.Context())
+	tags, cuisines, courses, err := s.store.RecipeFacets(r.Context(), actorID(r.Context()))
 	if err != nil {
 		s.fail(w, err, "facets")
 		return
@@ -178,7 +178,7 @@ func (s *Server) handleCreateRecipe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	st, _ := s.store.GetSettings(r.Context())
+	st, _ := s.store.GetSettings(r.Context(), actorID(r.Context()))
 	rc := &store.Recipe{Servings: st.DefaultServings, Course: "dinner"}
 	uid := actorID(r.Context())
 	if uid > 0 {
@@ -189,7 +189,7 @@ func (s *Server) handleCreateRecipe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.linkPantry(r, rc)
-	if err := s.store.CreateRecipe(r.Context(), rc); err != nil {
+	if err := s.store.CreateRecipe(r.Context(), actorID(r.Context()), rc); err != nil {
 		s.fail(w, err, "create recipe")
 		return
 	}
@@ -200,25 +200,25 @@ func (s *Server) handleCreateRecipe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) linkPantry(r *http.Request, rc *store.Recipe) {
 	for i := range rc.Ingredients {
 		if rc.Ingredients[i].PantryID != 0 {
-			if _, err := s.store.GetPantry(r.Context(), rc.Ingredients[i].PantryID); err == nil {
+			if _, err := s.store.GetPantry(r.Context(), actorID(r.Context()), rc.Ingredients[i].PantryID); err == nil {
 				continue
 			}
 			rc.Ingredients[i].PantryID = 0
 		}
-		if p, err := s.store.FindPantryByName(r.Context(), rc.Ingredients[i].Name); err == nil {
+		if p, err := s.store.FindPantryByName(r.Context(), actorID(r.Context()), rc.Ingredients[i].Name); err == nil {
 			rc.Ingredients[i].PantryID = p.ID
 		}
 	}
 }
 
 func (s *Server) handleGetRecipe(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.store.GetRecipe(r.Context(), idParam(r, "id"))
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return
 	}
-	cooks, _ := s.store.ListCooks(r.Context(), rc.ID, 10)
-	dates := s.store.PlanDatesForRecipe(r.Context(), rc.ID)
+	cooks, _ := s.store.ListCooks(r.Context(), actorID(r.Context()), rc.ID, 10)
+	dates := s.store.PlanDatesForRecipe(r.Context(), actorID(r.Context()), rc.ID)
 	if dates == nil {
 		dates = []string{}
 	}
@@ -251,10 +251,10 @@ func (s *Server) pantryMatches(r *http.Request, rc *store.Recipe) []*pantryMatch
 		var p *store.PantryItem
 		var err error
 		if ing.PantryID > 0 {
-			p, err = s.store.GetPantry(r.Context(), ing.PantryID)
+			p, err = s.store.GetPantry(r.Context(), actorID(r.Context()), ing.PantryID)
 		}
 		if p == nil || err != nil {
-			p, err = s.store.FindPantryByName(r.Context(), ing.Name)
+			p, err = s.store.FindPantryByName(r.Context(), actorID(r.Context()), ing.Name)
 		}
 		if err != nil || p == nil || p.Archived {
 			continue
@@ -276,7 +276,7 @@ func (s *Server) pantryMatches(r *http.Request, rc *store.Recipe) []*pantryMatch
 }
 
 func (s *Server) handleUpdateRecipe(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.store.GetRecipe(r.Context(), idParam(r, "id"))
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return
@@ -293,7 +293,7 @@ func (s *Server) handleUpdateRecipe(w http.ResponseWriter, r *http.Request) {
 	if in.Ingredients != nil {
 		s.linkPantry(r, rc)
 	}
-	if err := s.store.UpdateRecipe(r.Context(), rc); err != nil {
+	if err := s.store.UpdateRecipe(r.Context(), actorID(r.Context()), rc); err != nil {
 		s.fail(w, err, "update recipe")
 		return
 	}
@@ -301,12 +301,12 @@ func (s *Server) handleUpdateRecipe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteRecipe(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.store.GetRecipe(r.Context(), idParam(r, "id"))
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return
 	}
-	if err := s.store.DeleteRecipe(r.Context(), rc.ID); err != nil {
+	if err := s.store.DeleteRecipe(r.Context(), actorID(r.Context()), rc.ID); err != nil {
 		s.fail(w, err, "delete recipe")
 		return
 	}
@@ -315,13 +315,13 @@ func (s *Server) handleDeleteRecipe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleFavoriteRecipe(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.store.GetRecipe(r.Context(), idParam(r, "id"))
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return
 	}
 	rc.Favorite = !rc.Favorite
-	if err := s.store.UpdateRecipe(r.Context(), rc); err != nil {
+	if err := s.store.UpdateRecipe(r.Context(), actorID(r.Context()), rc); err != nil {
 		s.fail(w, err, "update recipe")
 		return
 	}
@@ -329,7 +329,7 @@ func (s *Server) handleFavoriteRecipe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDuplicateRecipe(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.store.GetRecipe(r.Context(), idParam(r, "id"))
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return
@@ -340,7 +340,7 @@ func (s *Server) handleDuplicateRecipe(w http.ResponseWriter, r *http.Request) {
 	if uid > 0 {
 		cp.CreatedBy = &uid
 	}
-	if err := s.store.CreateRecipe(r.Context(), &cp); err != nil {
+	if err := s.store.CreateRecipe(r.Context(), actorID(r.Context()), &cp); err != nil {
 		s.fail(w, err, "duplicate recipe")
 		return
 	}
@@ -348,7 +348,7 @@ func (s *Server) handleDuplicateRecipe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRecipePhoto(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.store.GetRecipe(r.Context(), idParam(r, "id"))
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return
@@ -357,7 +357,7 @@ func (s *Server) handleRecipePhoto(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUploadRecipePhoto(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.store.GetRecipe(r.Context(), idParam(r, "id"))
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return
@@ -382,7 +382,7 @@ func (s *Server) handleUploadRecipePhoto(w http.ResponseWriter, r *http.Request)
 	}
 	s.removeFile(rc.PhotoPath)
 	rc.PhotoPath = rel
-	if err := s.store.UpdateRecipe(r.Context(), rc); err != nil {
+	if err := s.store.UpdateRecipe(r.Context(), actorID(r.Context()), rc); err != nil {
 		s.fail(w, err, "update recipe")
 		return
 	}
@@ -390,14 +390,14 @@ func (s *Server) handleUploadRecipePhoto(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleDeleteRecipePhoto(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.store.GetRecipe(r.Context(), idParam(r, "id"))
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return
 	}
 	s.removeFile(rc.PhotoPath)
 	rc.PhotoPath = ""
-	if err := s.store.UpdateRecipe(r.Context(), rc); err != nil {
+	if err := s.store.UpdateRecipe(r.Context(), actorID(r.Context()), rc); err != nil {
 		s.fail(w, err, "update recipe")
 		return
 	}
@@ -422,7 +422,7 @@ func (s *Server) handleImportRecipe(w http.ResponseWriter, r *http.Request) {
 	}
 	rc := &store.Recipe{Title: imp.Title, Description: imp.Description, Servings: imp.Servings, PrepMinutes: imp.PrepMinutes, CookMinutes: imp.CookMinutes, Course: imp.Course, Cuisine: imp.Cuisine, Tags: normTags(imp.Tags), SourceURL: imp.SourceURL, SourceName: imp.SourceName, ImageURL: imp.ImageURL, Steps: imp.Steps, Nutrition: imp.Nutrition}
 	if rc.Servings <= 0 {
-		st, _ := s.store.GetSettings(r.Context())
+		st, _ := s.store.GetSettings(r.Context(), actorID(r.Context()))
 		rc.Servings = st.DefaultServings
 	}
 	for _, p := range imp.Ingredients {
@@ -443,7 +443,7 @@ func (s *Server) handleImportRecipe(w http.ResponseWriter, r *http.Request) {
 	if uid > 0 {
 		rc.CreatedBy = &uid
 	}
-	if err := s.store.CreateRecipe(r.Context(), rc); err != nil {
+	if err := s.store.CreateRecipe(r.Context(), actorID(r.Context()), rc); err != nil {
 		s.fail(w, err, "create recipe")
 		return
 	}
@@ -452,7 +452,7 @@ func (s *Server) handleImportRecipe(w http.ResponseWriter, r *http.Request) {
 
 // handleRecipeToList adds a recipe's ingredients to a shopping list.
 func (s *Server) handleRecipeToList(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.store.GetRecipe(r.Context(), idParam(r, "id"))
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return
@@ -469,15 +469,20 @@ func (s *Server) handleRecipeToList(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err, "list")
 		return
 	}
+	if in.PlanID > 0 {
+		if _, err := s.store.GetPlan(r.Context(), actorID(r.Context()), in.PlanID); err != nil {
+			in.PlanID = 0
+		}
+	}
 	added, skipped := s.addRecipeToList(r, list.ID, rc, in.Servings, in.SkipPantry, in.PlanID)
 	writeJSON(w, http.StatusOK, map[string]any{"list": list, "added": added, "skipped": skipped})
 }
 
 func (s *Server) resolveList(r *http.Request, id int64) (*store.List, error) {
 	if id > 0 {
-		return s.store.GetList(r.Context(), id)
+		return s.store.GetList(r.Context(), actorID(r.Context()), id)
 	}
-	return s.store.DefaultList(r.Context())
+	return s.store.DefaultList(r.Context(), actorID(r.Context()))
 }
 
 // addRecipeToList merges scaled ingredient lines into a list; skipPantry
@@ -498,10 +503,10 @@ func (s *Server) addRecipeToList(r *http.Request, listID int64, rc *store.Recipe
 			var p *store.PantryItem
 			var err error
 			if ing.PantryID > 0 {
-				p, err = s.store.GetPantry(r.Context(), ing.PantryID)
+				p, err = s.store.GetPantry(r.Context(), actorID(r.Context()), ing.PantryID)
 			}
 			if p == nil || err != nil {
-				p, err = s.store.FindPantryByName(r.Context(), ing.Name)
+				p, err = s.store.FindPantryByName(r.Context(), actorID(r.Context()), ing.Name)
 			}
 			if err == nil && p != nil && !p.Archived {
 				pid := p.ID
@@ -548,7 +553,7 @@ func pidOrNil(id int64) *int64 {
 // mergeItem adds a line or tops up an existing open line with the same name and unit family.
 func (s *Server) mergeItem(r *http.Request, listID int64, name string, qty float64, unit, note, aisle string, recipeID, planID, pantryID *int64, uid int64) *store.ListItem {
 	unit = units.Normalize(unit)
-	if ex, err := s.store.FindOpenItem(r.Context(), listID, name, unit); err == nil {
+	if ex, err := s.store.FindOpenItem(r.Context(), actorID(r.Context()), listID, name, unit); err == nil {
 		ex.Qty += qty
 		if note != "" && !strings.Contains(ex.Note, note) {
 			if ex.Note != "" {
@@ -559,7 +564,7 @@ func (s *Server) mergeItem(r *http.Request, listID int64, name string, qty float
 		if ex.PantryID == nil {
 			ex.PantryID = pantryID
 		}
-		if err := s.store.UpdateItem(r.Context(), ex); err == nil {
+		if err := s.store.UpdateItem(r.Context(), actorID(r.Context()), ex); err == nil {
 			return ex
 		}
 	}
@@ -569,7 +574,7 @@ func (s *Server) mergeItem(r *http.Request, listID int64, name string, qty float
 			if cand == unit {
 				continue
 			}
-			if ex, err := s.store.FindOpenItem(r.Context(), listID, name, cand); err == nil {
+			if ex, err := s.store.FindOpenItem(r.Context(), actorID(r.Context()), listID, name, cand); err == nil {
 				if conv, ok := units.Convert(qty, unit, cand); ok {
 					ex.Qty += conv
 					base, fam := units.ToBase(ex.Qty, ex.Unit)
@@ -577,7 +582,7 @@ func (s *Server) mergeItem(r *http.Request, listID int64, name string, qty float
 					if ex.PantryID == nil {
 						ex.PantryID = pantryID
 					}
-					if err := s.store.UpdateItem(r.Context(), ex); err == nil {
+					if err := s.store.UpdateItem(r.Context(), actorID(r.Context()), ex); err == nil {
 						return ex
 					}
 				}
@@ -588,7 +593,7 @@ func (s *Server) mergeItem(r *http.Request, listID int64, name string, qty float
 	if uid > 0 {
 		it.CreatedBy = &uid
 	}
-	if err := s.store.CreateItem(r.Context(), it); err != nil {
+	if err := s.store.CreateItem(r.Context(), actorID(r.Context()), it); err != nil {
 		return nil
 	}
 	return it
@@ -625,7 +630,7 @@ func aisleFor(name string) string {
 }
 
 func (s *Server) handleRecipeMarkdown(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.store.GetRecipe(r.Context(), idParam(r, "id"))
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return
@@ -667,8 +672,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"recipes": []store.Recipe{}, "pantry": []store.PantryItem{}})
 		return
 	}
-	recipes, _ := s.store.ListRecipes(r.Context(), store.RecipeFilter{Query: q, Limit: 8})
-	pantry, _ := s.store.ListPantry(r.Context(), store.PantryFilter{Query: q})
+	recipes, _ := s.store.ListRecipes(r.Context(), actorID(r.Context()), store.RecipeFilter{Query: q, Limit: 8})
+	pantry, _ := s.store.ListPantry(r.Context(), actorID(r.Context()), store.PantryFilter{Query: q})
 	if len(pantry) > 8 {
 		pantry = pantry[:8]
 	}
@@ -687,7 +692,7 @@ type cookInput struct {
 }
 
 func (s *Server) handleCookRecipe(w http.ResponseWriter, r *http.Request) {
-	rc, err := s.store.GetRecipe(r.Context(), idParam(r, "id"))
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return

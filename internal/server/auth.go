@@ -95,21 +95,34 @@ func (s *Server) coreUser(ctx context.Context, tok string) (*store.User, error) 
 	return s.firstOrSystemUser(ctx, strings.ToLower(in.User.Email), in.User.Name)
 }
 
-// firstOrSystemUser returns the user with that email, creating it when missing.
-// The very first account becomes admin, later ones are members.
+// firstOrSystemUser returns the user with that email, creating it when missing
+// (Core / PocketID sign-in, Core device tokens, proxy and no-auth modes).
+// Accounts created on first contact are members — whatever role Core reports —
+// except the very first account on the box, which becomes the admin (the
+// owner). The account is created as a member and only promoted when it is the
+// lowest id and no admin exists, so two simultaneous first contacts cannot
+// both end up admin.
 func (s *Server) firstOrSystemUser(ctx context.Context, email, name string) (*store.User, error) {
 	if u, err := s.store.GetUserByEmail(ctx, email); err == nil {
 		return u, nil
 	}
-	role := "member"
-	if n, _ := s.store.CountUsers(ctx); n == 0 {
-		role = "admin"
-	}
-	u := &store.User{Email: email, Name: name, Role: role}
+	u := &store.User{Email: email, Name: name, Role: "member"}
 	if err := s.store.CreateUser(ctx, u); err != nil {
 		return nil, err
 	}
+	if n, _ := s.store.CountAdmins(ctx); n == 0 && s.store.OwnerID(ctx) == u.ID {
+		u.Role = "admin"
+		if err := s.store.UpdateUser(ctx, u); err != nil {
+			return nil, err
+		}
+	}
+	role := u.Role
 	s.log.Info("auto-provisioned user", "email", email, "mode", s.cfg.AuthMode, "role", role)
+	if role == "admin" {
+		if err := s.ownerReady(ctx, u.ID); err != nil {
+			s.log.Warn("owner settings", "err", err)
+		}
+	}
 	return u, nil
 }
 
@@ -126,7 +139,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err, "count users")
 		return
 	}
-	st, _ := s.store.GetSettings(r.Context())
+	st, _ := s.store.GetSettings(r.Context(), 0)
 	u, _ := s.resolveUser(r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"needs_setup":   n == 0 && s.cfg.AuthMode == "local",
@@ -171,9 +184,12 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err, "create user")
 		return
 	}
-	st, _ := s.store.GetSettings(ctx)
+	st, _ := s.store.GetSettings(ctx, 0)
 	st.SetupComplete = true
-	_ = s.store.SaveSettings(ctx, st)
+	_ = s.store.SaveBoxSettings(ctx, st)
+	if err := s.ownerReady(ctx, u.ID); err != nil {
+		s.log.Warn("owner settings", "err", err)
+	}
 	id, err := s.store.CreateSession(ctx, u.ID, s.cfg.SessionTTL)
 	if err != nil {
 		s.fail(w, err, "create session")
@@ -259,8 +275,13 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 
 // ---- users ----
 
-// handleListUsers is open to every signed-in user so the household can be shown.
+// handleListUsers lists every account for an admin (to manage them); anyone
+// else only sees themselves.
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	if me := userFrom(r.Context()); me.Role != "admin" {
+		writeJSON(w, http.StatusOK, []store.User{*me})
+		return
+	}
 	users, err := s.store.ListUsers(r.Context())
 	if err != nil {
 		s.fail(w, err, "list users")
@@ -388,9 +409,13 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	photos := s.store.RecipePhotoPaths(r.Context(), id)
 	if err := s.store.DeleteUser(r.Context(), id); err != nil {
 		s.fail(w, err, "delete user")
 		return
+	}
+	for _, p := range photos {
+		s.removeFile(p)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -12,7 +12,7 @@ import (
 
 func (s *Server) handleListPantry(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	items, err := s.store.ListPantry(r.Context(), store.PantryFilter{Query: q.Get("q"), Location: q.Get("location"), Category: q.Get("category"), Low: queryBool(r, "low"), Expiring: queryBool(r, "expiring"), Archived: queryBool(r, "archived")})
+	items, err := s.store.ListPantry(r.Context(), actorID(r.Context()), store.PantryFilter{Query: q.Get("q"), Location: q.Get("location"), Category: q.Get("category"), Low: queryBool(r, "low"), Expiring: queryBool(r, "expiring"), Archived: queryBool(r, "archived")})
 	if err != nil {
 		s.fail(w, err, "pantry")
 		return
@@ -21,7 +21,7 @@ func (s *Server) handleListPantry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePantryFacets(w http.ResponseWriter, r *http.Request) {
-	locs, cats, err := s.store.PantryFacets(r.Context())
+	locs, cats, err := s.store.PantryFacets(r.Context(), actorID(r.Context()))
 	if err != nil {
 		s.fail(w, err, "facets")
 		return
@@ -32,19 +32,19 @@ func (s *Server) handlePantryFacets(w http.ResponseWriter, r *http.Request) {
 	if cats == nil {
 		cats = []string{}
 	}
-	synced, _, _ := s.store.CacheGet(r.Context(), "pantry:synced_at")
-	total, low, expiring := s.store.PantryStats(r.Context())
+	synced, _, _ := s.store.CacheGet(r.Context(), syncedKey(actorID(r.Context())))
+	total, low, expiring := s.store.PantryStats(r.Context(), actorID(r.Context()))
 	writeJSON(w, http.StatusOK, map[string]any{"locations": locs, "categories": cats, "synced_at": synced, "total": total, "low": low, "expiring": expiring})
 }
 
 func (s *Server) handleGetPantry(w http.ResponseWriter, r *http.Request) {
-	p, err := s.store.GetPantry(r.Context(), idParam(r, "id"))
+	p, err := s.store.GetPantry(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get pantry item")
 		return
 	}
 	// recipes that use it
-	recipes, _ := s.store.ListRecipes(r.Context(), store.RecipeFilter{Query: p.Name, Limit: 10})
+	recipes, _ := s.store.ListRecipes(r.Context(), actorID(r.Context()), store.RecipeFilter{Query: p.Name, Limit: 10})
 	writeJSON(w, http.StatusOK, map[string]any{"item": p, "recipes": recipes})
 }
 
@@ -129,7 +129,7 @@ func (s *Server) createPantry(r *http.Request, cl clients, p *store.PantryItem) 
 		p.Location, p.Category = it.Location, it.Category
 		p.SyncedAt = store.Now()
 	}
-	return s.store.CreatePantry(ctx, p)
+	return s.store.CreatePantry(ctx, actorID(ctx), p)
 }
 
 func (s *Server) handleCreatePantry(w http.ResponseWriter, r *http.Request) {
@@ -143,12 +143,12 @@ func (s *Server) handleCreatePantry(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	cl := s.clients(r.Context())
+	cl := s.clients(r.Context(), actorID(r.Context()))
 	if in.Local {
 		cl.inventory = pocket.New("", "", 0)
 	}
 	if p.Barcode != "" {
-		if ex, err := s.store.GetPantryByBarcode(r.Context(), p.Barcode); err == nil && !ex.Archived {
+		if ex, err := s.store.GetPantryByBarcode(r.Context(), actorID(r.Context()), p.Barcode); err == nil && !ex.Archived {
 			writeErr(w, http.StatusConflict, "that barcode is already in the pantry as "+ex.Name)
 			return
 		}
@@ -161,7 +161,7 @@ func (s *Server) handleCreatePantry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdatePantry(w http.ResponseWriter, r *http.Request) {
-	p, err := s.store.GetPantry(r.Context(), idParam(r, "id"))
+	p, err := s.store.GetPantry(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get pantry item")
 		return
@@ -176,7 +176,7 @@ func (s *Server) handleUpdatePantry(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	cl := s.clients(r.Context())
+	cl := s.clients(r.Context(), actorID(r.Context()))
 	if p.InventoryID != nil && cl.inventory.Configured() {
 		patch := map[string]any{"name": p.Name, "unit": p.Unit, "min_quantity": p.MinQuantity, "barcode": p.Barcode, "brand": p.Brand, "expiry_date": p.ExpiryDate, "notes": p.Notes}
 		if p.Location != before.Location {
@@ -200,7 +200,7 @@ func (s *Server) handleUpdatePantry(w http.ResponseWriter, r *http.Request) {
 			_ = cl.inventory.ArchiveItem(r.Context(), *p.InventoryID)
 		}
 	}
-	if err := s.store.UpdatePantry(r.Context(), p); err != nil {
+	if err := s.store.UpdatePantry(r.Context(), actorID(r.Context()), p); err != nil {
 		s.fail(w, err, "update pantry item")
 		return
 	}
@@ -210,12 +210,12 @@ func (s *Server) handleUpdatePantry(w http.ResponseWriter, r *http.Request) {
 // handleDeletePantry removes the row; with ?inventory=archive the mirrored
 // inventory item is archived too (default: it only loses the pantry tag).
 func (s *Server) handleDeletePantry(w http.ResponseWriter, r *http.Request) {
-	p, err := s.store.GetPantry(r.Context(), idParam(r, "id"))
+	p, err := s.store.GetPantry(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get pantry item")
 		return
 	}
-	cl := s.clients(r.Context())
+	cl := s.clients(r.Context(), actorID(r.Context()))
 	if p.InventoryID != nil && cl.inventory.Configured() {
 		if r.URL.Query().Get("inventory") == "archive" {
 			_ = cl.inventory.ArchiveItem(r.Context(), *p.InventoryID)
@@ -223,7 +223,7 @@ func (s *Server) handleDeletePantry(w http.ResponseWriter, r *http.Request) {
 			_, _ = cl.inventory.UpdateItem(r.Context(), *p.InventoryID, map[string]any{"tags": removeTag(it.Tags, cl.st.InventoryTag)})
 		}
 	}
-	if err := s.store.DeletePantry(r.Context(), p.ID); err != nil {
+	if err := s.store.DeletePantry(r.Context(), actorID(r.Context()), p.ID); err != nil {
 		s.fail(w, err, "delete pantry item")
 		return
 	}
@@ -241,7 +241,7 @@ func removeTag(tags, tag string) string {
 }
 
 func (s *Server) handleAdjustPantry(w http.ResponseWriter, r *http.Request) {
-	p, err := s.store.GetPantry(r.Context(), idParam(r, "id"))
+	p, err := s.store.GetPantry(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get pantry item")
 		return
@@ -255,7 +255,7 @@ func (s *Server) handleAdjustPantry(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	cl := s.clients(r.Context())
+	cl := s.clients(r.Context(), actorID(r.Context()))
 	note := strings.TrimSpace(in.Note)
 	if note == "" {
 		note = "Pocket Kitchen"
@@ -273,7 +273,7 @@ func (s *Server) handleAdjustPantry(w http.ResponseWriter, r *http.Request) {
 		} else {
 			p.Quantity = max(0, *in.Quantity)
 		}
-		if err := s.store.UpdatePantry(r.Context(), p); err != nil {
+		if err := s.store.UpdatePantry(r.Context(), actorID(r.Context()), p); err != nil {
 			s.fail(w, err, "update pantry item")
 			return
 		}

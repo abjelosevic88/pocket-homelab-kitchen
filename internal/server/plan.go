@@ -8,13 +8,13 @@ import (
 )
 
 func (s *Server) handleListPlan(w http.ResponseWriter, r *http.Request) {
-	st, _ := s.store.GetSettings(r.Context())
+	st, _ := s.store.GetSettings(r.Context(), actorID(r.Context()))
 	from, to := weekRange(r.URL.Query().Get("from"), r.URL.Query().Get("to"), st.WeekStart)
 	if !validDate(from) || !validDate(to) {
 		writeErr(w, http.StatusBadRequest, "from/to must be YYYY-MM-DD")
 		return
 	}
-	entries, err := s.store.ListPlan(r.Context(), from, to)
+	entries, err := s.store.ListPlan(r.Context(), actorID(r.Context()), from, to)
 	if err != nil {
 		s.fail(w, err, "list plan")
 		return
@@ -50,7 +50,7 @@ func (s *Server) applyPlan(r *http.Request, p *store.PlanEntry, in planInput) st
 	}
 	if in.RecipeID != nil {
 		if *in.RecipeID > 0 {
-			if _, err := s.store.GetRecipe(r.Context(), *in.RecipeID); err != nil {
+			if _, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), *in.RecipeID); err != nil {
 				return "recipe not found"
 			}
 			p.RecipeID = in.RecipeID
@@ -96,7 +96,7 @@ func (s *Server) handleCreatePlan(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	if err := s.store.CreatePlan(r.Context(), p); err != nil {
+	if err := s.store.CreatePlan(r.Context(), actorID(r.Context()), p); err != nil {
 		s.fail(w, err, "create plan entry")
 		return
 	}
@@ -104,7 +104,7 @@ func (s *Server) handleCreatePlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdatePlan(w http.ResponseWriter, r *http.Request) {
-	p, err := s.store.GetPlan(r.Context(), idParam(r, "id"))
+	p, err := s.store.GetPlan(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get plan entry")
 		return
@@ -118,7 +118,7 @@ func (s *Server) handleUpdatePlan(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	if err := s.store.UpdatePlan(r.Context(), p); err != nil {
+	if err := s.store.UpdatePlan(r.Context(), actorID(r.Context()), p); err != nil {
 		s.fail(w, err, "update plan entry")
 		return
 	}
@@ -126,7 +126,7 @@ func (s *Server) handleUpdatePlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeletePlan(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.DeletePlan(r.Context(), idParam(r, "id")); err != nil {
+	if err := s.store.DeletePlan(r.Context(), actorID(r.Context()), idParam(r, "id")); err != nil {
 		s.fail(w, err, "delete plan entry")
 		return
 	}
@@ -134,7 +134,7 @@ func (s *Server) handleDeletePlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCookPlan(w http.ResponseWriter, r *http.Request) {
-	p, err := s.store.GetPlan(r.Context(), idParam(r, "id"))
+	p, err := s.store.GetPlan(r.Context(), actorID(r.Context()), idParam(r, "id"))
 	if err != nil {
 		s.fail(w, err, "get plan entry")
 		return
@@ -159,21 +159,21 @@ func (s *Server) handleCookPlan(w http.ResponseWriter, r *http.Request) {
 		if uid := actorID(r.Context()); uid > 0 {
 			c.UserID = &uid
 		}
-		_ = s.store.CreateCook(r.Context(), c)
+		_ = s.store.CreateCook(r.Context(), actorID(r.Context()), c)
 		p.CookID = &c.ID
-		_ = s.store.UpdatePlan(r.Context(), p)
-		cl := s.clients(r.Context())
+		_ = s.store.UpdatePlan(r.Context(), actorID(r.Context()), p)
+		cl := s.clients(r.Context(), actorID(r.Context()))
 		marked := false
 		if (in.MarkHabit == nil || *in.MarkHabit) && cl.habits.Configured() && cl.st.HabitID > 0 {
 			if err := cl.habits.MarkHabit(r.Context(), cl.st.HabitID, in.Date, 1); err == nil {
 				marked = true
-				_ = s.store.UpdateCookFlags(r.Context(), c.ID, true, 0)
+				_ = s.store.UpdateCookFlags(r.Context(), actorID(r.Context()), c.ID, true, 0)
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"cook": c, "habit_marked": marked, "deducted": []string{}, "not_in_pantry": []string{}, "warnings": []string{}})
 		return
 	}
-	rc, err := s.store.GetRecipe(r.Context(), *p.RecipeID)
+	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), *p.RecipeID)
 	if err != nil {
 		s.fail(w, err, "get recipe")
 		return
@@ -198,9 +198,9 @@ func (s *Server) handlePlanToList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	st, _ := s.store.GetSettings(r.Context())
+	st, _ := s.store.GetSettings(r.Context(), actorID(r.Context()))
 	from, to := weekRange(in.From, in.To, st.WeekStart)
-	entries, err := s.store.ListPlan(r.Context(), from, to)
+	entries, err := s.store.ListPlan(r.Context(), actorID(r.Context()), from, to)
 	if err != nil {
 		s.fail(w, err, "list plan")
 		return
@@ -216,7 +216,7 @@ func (s *Server) handlePlanToList(w http.ResponseWriter, r *http.Request) {
 		if p.RecipeID == nil || p.CookedAt != "" {
 			continue
 		}
-		rc, err := s.store.GetRecipe(r.Context(), *p.RecipeID)
+		rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), *p.RecipeID)
 		if err != nil {
 			continue
 		}
@@ -225,7 +225,7 @@ func (s *Server) handlePlanToList(w http.ResponseWriter, r *http.Request) {
 		total += len(added)
 		skippedAll = append(skippedAll, skipped...)
 	}
-	l, _ := s.store.GetList(r.Context(), list.ID)
+	l, _ := s.store.GetList(r.Context(), actorID(r.Context()), list.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"list": l, "recipes": recipes, "added": total, "skipped": skippedAll, "from": from, "to": to})
 }
 
@@ -240,7 +240,7 @@ func (s *Server) handleCopyPlan(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "from, to and days are required")
 		return
 	}
-	entries, err := s.store.ListPlan(r.Context(), in.From, in.To)
+	entries, err := s.store.ListPlan(r.Context(), actorID(r.Context()), in.From, in.To)
 	if err != nil {
 		s.fail(w, err, "list plan")
 		return
@@ -252,7 +252,7 @@ func (s *Server) handleCopyPlan(w http.ResponseWriter, r *http.Request) {
 		if uid > 0 {
 			np.CreatedBy = &uid
 		}
-		if err := s.store.CreatePlan(r.Context(), &np); err == nil {
+		if err := s.store.CreatePlan(r.Context(), actorID(r.Context()), &np); err == nil {
 			n++
 		}
 	}

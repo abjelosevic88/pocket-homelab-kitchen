@@ -42,25 +42,29 @@ func (s *Server) cook(r *http.Request, rc *store.Recipe, in cookInput) (*cookRes
 		c.UserID = &uid
 	}
 	if in.PlanID > 0 {
-		c.PlanID = &in.PlanID
+		if _, err := s.store.GetPlan(ctx, uid, in.PlanID); err != nil {
+			in.PlanID = 0 // not one of the caller's plan entries
+		} else {
+			c.PlanID = &in.PlanID
+		}
 	}
-	if err := s.store.CreateCook(ctx, c); err != nil {
+	if err := s.store.CreateCook(ctx, actorID(ctx), c); err != nil {
 		return nil, err
 	}
-	_ = s.store.MarkCooked(ctx, rc.ID, in.Date)
+	_ = s.store.MarkCooked(ctx, actorID(ctx), rc.ID, in.Date)
 	if in.Rating > 0 {
 		rc.Rating = in.Rating
-		_ = s.store.UpdateRecipe(ctx, rc)
+		_ = s.store.UpdateRecipe(ctx, actorID(ctx), rc)
 	}
 	if in.PlanID > 0 {
-		if p, err := s.store.GetPlan(ctx, in.PlanID); err == nil {
+		if p, err := s.store.GetPlan(ctx, actorID(ctx), in.PlanID); err == nil {
 			p.CookedAt = store.Now()
 			p.CookID = &c.ID
-			_ = s.store.UpdatePlan(ctx, p)
+			_ = s.store.UpdatePlan(ctx, actorID(ctx), p)
 		}
 	}
 	res := &cookResult{Cook: *c, Deducted: []string{}, NotInPantry: []string{}, Warnings: []string{}}
-	cl := s.clients(ctx)
+	cl := s.clients(ctx, actorID(ctx))
 	factor := 1.0
 	if rc.Servings > 0 {
 		factor = float64(in.Servings) / float64(rc.Servings)
@@ -73,10 +77,10 @@ func (s *Server) cook(r *http.Request, rc *store.Recipe, in cookInput) (*cookRes
 			var p *store.PantryItem
 			var err error
 			if ing.PantryID > 0 {
-				p, err = s.store.GetPantry(ctx, ing.PantryID)
+				p, err = s.store.GetPantry(ctx, actorID(ctx), ing.PantryID)
 			}
 			if p == nil || err != nil {
-				p, err = s.store.FindPantryByName(ctx, ing.Name)
+				p, err = s.store.FindPantryByName(ctx, actorID(ctx), ing.Name)
 			}
 			if err != nil || p == nil || p.Archived {
 				if !ing.Optional {
@@ -111,14 +115,14 @@ func (s *Server) cook(r *http.Request, rc *store.Recipe, in cookInput) (*cookRes
 			res.HabitMarked = true
 		}
 	}
-	_ = s.store.UpdateCookFlags(ctx, c.ID, res.HabitMarked, len(res.Deducted))
+	_ = s.store.UpdateCookFlags(ctx, actorID(ctx), c.ID, res.HabitMarked, len(res.Deducted))
 	c.HabitMarked, c.PantryDeducted = res.HabitMarked, len(res.Deducted)
 	res.Cook = *c
-	if nr, err := s.store.GetRecipe(ctx, rc.ID); err == nil {
+	if nr, err := s.store.GetRecipe(ctx, actorID(ctx), rc.ID); err == nil {
 		res.Recipe = *nr
 	}
 	s.publish("kitchen.cooked", fmt.Sprintf("recipe:%d", rc.ID), map[string]any{
-		"recipe_id": rc.ID, "recipe": rc.Title, "date": in.Date, "servings": in.Servings, "rating": in.Rating,
+		"user_email": userFrom(ctx).Email, "recipe_id": rc.ID, "recipe": rc.Title, "date": in.Date, "servings": in.Servings, "rating": in.Rating,
 		"deducted": res.Deducted, "habit_marked": res.HabitMarked, "cook_id": c.ID,
 	})
 	return res, nil
@@ -148,5 +152,5 @@ func (s *Server) adjustPantry(r *http.Request, cl clients, p *store.PantryItem, 
 			p.Quantity = 0
 		}
 	}
-	return s.store.UpdatePantry(ctx, p)
+	return s.store.UpdatePantry(ctx, actorID(ctx), p)
 }

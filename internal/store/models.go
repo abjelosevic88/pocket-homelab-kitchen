@@ -1,8 +1,9 @@
 package store
 
-// User is an account that can sign in. The first user is the admin; admins
-// manage other users and the shared settings. Everything else — recipes, the
-// plan, lists, the pantry — belongs to the household.
+// User is an account that can sign in. The first user is the admin (the
+// owner); admins manage accounts and the few box-wide settings. Everything
+// else — recipes, the plan, lists, the pantry, the cook log, checkouts and the
+// integration settings — belongs to exactly one user.
 type User struct {
 	ID           int64  `json:"id"`
 	Email        string `json:"email"`
@@ -224,7 +225,8 @@ type Purchase struct {
 	CreatedAt       string `json:"created_at"`
 }
 
-// Settings are preferences stored as key/value pairs, shared by everyone.
+// Settings are one user's preferences and integrations (user_settings) merged
+// with the box-wide title / Open Food Facts / setup flag (settings).
 type Settings struct {
 	Title             string `json:"title"`
 	HomeCurrency      string `json:"home_currency"`

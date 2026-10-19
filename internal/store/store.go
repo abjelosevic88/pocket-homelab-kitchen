@@ -34,6 +34,9 @@ var ErrConflict = errors.New("already exists")
 type Store struct {
 	DB  *sql.DB
 	log *slog.Logger
+
+	// DefaultCurrency is the home currency a person starts with (DEFAULT_CURRENCY).
+	DefaultCurrency string
 }
 
 // Open opens (and creates if needed) the SQLite database and runs migrations.
@@ -121,7 +124,26 @@ func (s *Store) Backup(ctx context.Context, dst string) error {
 // Tables lists the tables counted for metrics / the About page.
 var Tables = []string{"recipes", "plan", "lists", "list_items", "pantry", "cooklog", "purchases", "users", "api_tokens"}
 
-// Counts returns row counts per table.
+// userTables are the content tables counted per user.
+var userTables = []string{"recipes", "plan", "lists", "list_items", "pantry", "cooklog", "purchases", "api_tokens"}
+
+// CountsFor returns one user's row counts per content table (plus the number of accounts).
+func (s *Store) CountsFor(ctx context.Context, uid int64) map[string]int {
+	out := map[string]int{}
+	for _, t := range userTables {
+		var n int
+		if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM `+t+` WHERE user_id = ?`, uid).Scan(&n); err == nil {
+			out[t] = n
+		}
+	}
+	var n int
+	if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM users`).Scan(&n); err == nil {
+		out["users"] = n
+	}
+	return out
+}
+
+// Counts returns box-wide row counts per table (metrics only — never shown as content).
 func (s *Store) Counts(ctx context.Context) map[string]int {
 	out := map[string]int{}
 	for _, t := range Tables {

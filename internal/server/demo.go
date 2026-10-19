@@ -7,9 +7,9 @@ import (
 )
 
 // seedDemo fills an empty database with a few recipes, a pantry, this week's
-// plan and a shopping list (DEMO_DATA=true). Runs once.
-func (s *Server) seedDemo(ctx context.Context) error {
-	if c := s.store.Counts(ctx); c["recipes"] > 0 {
+// plan and a shopping list (DEMO_DATA=true) — all of it the owner's. Runs once.
+func (s *Server) seedDemo(ctx context.Context, uid int64) error {
+	if c := s.store.CountsFor(ctx, uid); c["recipes"] > 0 {
 		return nil
 	}
 	pantry := []store.PantryItem{
@@ -34,7 +34,7 @@ func (s *Server) seedDemo(ctx context.Context) error {
 	}
 	ids := map[string]int64{}
 	for i := range pantry {
-		if err := s.store.CreatePantry(ctx, &pantry[i]); err != nil {
+		if err := s.store.CreatePantry(ctx, uid, &pantry[i]); err != nil {
 			return err
 		}
 		ids[pantry[i].Name] = pantry[i].ID
@@ -70,7 +70,7 @@ func (s *Server) seedDemo(ctx context.Context) error {
 	}
 	rids := map[string]int64{}
 	for i := range recipes {
-		if err := s.store.CreateRecipe(ctx, &recipes[i]); err != nil {
+		if err := s.store.CreateRecipe(ctx, uid, &recipes[i]); err != nil {
 			return err
 		}
 		rids[recipes[i].Title] = recipes[i].ID
@@ -94,11 +94,11 @@ func (s *Server) seedDemo(ctx context.Context) error {
 			id := rids[p.title]
 			e.RecipeID = &id
 		}
-		if err := s.store.CreatePlan(ctx, &e); err != nil {
+		if err := s.store.CreatePlan(ctx, uid, &e); err != nil {
 			return err
 		}
 	}
-	l, err := s.store.DefaultList(ctx)
+	l, err := s.store.DefaultList(ctx, uid)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func (s *Server) seedDemo(ctx context.Context) error {
 		{Name: "Spring onion", Qty: 1, Unit: "bunch", Aisle: "produce"}, {Name: "Soy sauce", Qty: 1, Unit: "pcs", Aisle: "pantry"}, {Name: "Dish soap", Qty: 1, Unit: "pcs", Aisle: "household", Checked: true, Price: 349, Currency: "EUR"},
 	} {
 		it.ListID = l.ID
-		if err := s.store.CreateItem(ctx, &it); err != nil {
+		if err := s.store.CreateItem(ctx, uid, &it); err != nil {
 			return err
 		}
 	}
@@ -123,9 +123,9 @@ func (s *Server) seedDemo(ctx context.Context) error {
 			id := rids["Tomato & garlic pasta"]
 			c.RecipeID = &id
 		}
-		_ = s.store.CreateCook(ctx, &c)
+		_ = s.store.CreateCook(ctx, uid, &c)
 	}
-	_ = s.store.CreatePurchase(ctx, &store.Purchase{ListName: l.Name, Date: store.AddDays(today, -3), Store: "Bingo", Amount: 4720, Currency: "EUR", Items: 9, ItemNames: "milk, eggs, flour, onions, tomatoes, rice, butter, parmesan, yogurt", PantryRestocked: 9})
+	_ = s.store.CreatePurchase(ctx, uid, &store.Purchase{ListName: l.Name, Date: store.AddDays(today, -3), Store: "Bingo", Amount: 4720, Currency: "EUR", Items: 9, ItemNames: "milk, eggs, flour, onions, tomatoes, rice, butter, parmesan, yogurt", PantryRestocked: 9})
 	s.log.Info("demo data seeded")
 	return nil
 }

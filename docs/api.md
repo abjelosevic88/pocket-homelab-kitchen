@@ -2,6 +2,8 @@
 
 Base path `/api/v1`. JSON in and out. Authenticate with the session cookie (browser), `Authorization: Bearer <token>` or `X-API-Key: <token>` (tokens under Settings → API & apps). Money is in **minor units** (`1250` = 12.50) with a `currency` code. Quantities are floats with a free-text `unit` (`g`, `kg`, `ml`, `l`, `tsp`, `tbsp`, `cup`, `pcs`… are understood and merged on lists).
 
+Everything is per person: every recipe, plan entry, list, list line, pantry row, cook and checkout belongs to the account that created it, and every endpoint only sees the caller's own rows (someone else's id answers `404`). API tokens and Pocket Core tokens act as the account they belong to.
+
 ## Auth & account
 | Method | Path | Notes |
 |---|---|---|
@@ -9,13 +11,13 @@ Base path `/api/v1`. JSON in and out. Authenticate with the session cookie (brow
 | POST | `/auth/setup` · `/auth/login` · `/auth/logout` | `{email, password, name}` |
 | GET/PUT | `/auth/me` | profile, password change |
 | GET/POST/DELETE | `/tokens`, `/tokens/{id}` | personal access tokens |
-| GET/POST/PUT/DELETE | `/users`, `/users/{id}` | admin |
-| GET/PUT | `/settings` · GET `/settings/system` | shared settings (secrets masked; a masked value means "keep") |
+| GET/POST/PUT/DELETE | `/users`, `/users/{id}` | admin (a member's GET lists only themselves); deleting a user deletes their kitchen |
+| GET/PUT | `/settings` · GET `/settings/system` | your own settings and integrations (secrets masked; a masked value means "keep"); `title` / `food_facts` are box-wide and only taken from an admin |
 | GET | `/meta` · `/currencies` | lists the UI uses |
 | GET | `/dashboard` | for a Homepage widget: `today`, `tomorrow`, `shopping_open`, `pantry_low`, `pantry_expiring`, `cooked_month`, `spend_month_text`… |
 | GET | `/home` | everything the home page shows |
 | GET | `/search?q=` | recipes + pantry |
-| GET | `/backup` · `/export.json` · POST `/import` | SQLite copy; JSON export / merge-import |
+| GET | `/backup` · `/export.json` · POST `/import` | SQLite copy of the whole box (admin only); JSON export / merge-import of your own kitchen |
 
 ## Recipes
 | Method | Path | Notes |
