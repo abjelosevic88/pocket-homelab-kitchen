@@ -26,6 +26,8 @@ Everything is read from environment variables; every value has a default so a ba
 | `NOTIFY_URL` / `NOTIFY_FORMAT` / `NOTIFY_HOUR` | – / guessed / `9` | Apprise `…/notify/<key>`, ntfy topic URL or JSON webhook; `apprise`, `ntfy`, `json`; hour of the daily message |
 | `OPENFOODFACTS` | `true` | Look up unknown barcodes on Open Food Facts |
 | `USER_AGENT` | `PocketKitchen/1.0 (…)` | Sent to recipe sites and Open Food Facts |
+| `CORE_URL` / `CORE_REGISTRATION_KEY` | – | [Pocket Core](https://git.bjelke.org/abjelosevic88/pocket-homelab-core): register on start (the key is needed once; the minted app token lives in `$DATA_DIR/core.token`), publish `kitchen.cooked` / `kitchen.checkout`, accept the tokens Core hands to paired phones, and resolve Inventory / Split / Habits through Core when their `*_URL` is empty |
+| `CORE_APP_URL` | `BASE_URL` | How Core reaches this app for health checks (e.g. `http://host.docker.internal:8176`) |
 | `DEMO_DATA` | `false` | Seed eight recipes, a pantry, a week's plan and a list on an empty database |
 
 ## Auth modes

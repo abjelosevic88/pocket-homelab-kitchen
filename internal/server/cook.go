@@ -117,6 +117,10 @@ func (s *Server) cook(r *http.Request, rc *store.Recipe, in cookInput) (*cookRes
 	if nr, err := s.store.GetRecipe(ctx, rc.ID); err == nil {
 		res.Recipe = *nr
 	}
+	s.publish("kitchen.cooked", fmt.Sprintf("recipe:%d", rc.ID), map[string]any{
+		"recipe_id": rc.ID, "recipe": rc.Title, "date": in.Date, "servings": in.Servings, "rating": in.Rating,
+		"deducted": res.Deducted, "habit_marked": res.HabitMarked, "cook_id": c.ID,
+	})
 	return res, nil
 }
 

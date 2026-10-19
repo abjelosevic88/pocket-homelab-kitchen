@@ -538,6 +538,9 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 	res.Purchase = *p
 	res.List, _ = s.store.GetList(ctx, l.ID)
+	s.publish("kitchen.checkout", fmt.Sprintf("list:%d", l.ID), map[string]any{
+		"list_id": l.ID, "list": l.Name, "amount": in.Amount, "currency": in.Currency, "date": in.Date, "store": in.Store,
+	})
 	writeJSON(w, http.StatusOK, res)
 }
 
