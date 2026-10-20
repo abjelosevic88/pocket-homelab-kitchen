@@ -28,12 +28,15 @@ func (s *Store) CreateCook(ctx context.Context, uid int64, c *Cook, after ...cor
 		return ErrNotFound
 	}
 	c.UserID = &uid
-	res, err := tx.ExecContext(ctx, `INSERT INTO cooklog (recipe_id, plan_id, date, servings, notes, rating, user_id, habit_marked, pantry_deducted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	c.ID, err = reserveResourceID(ctx, tx, "cooklog")
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO cooklog (id, recipe_id, plan_id, date, servings, notes, rating, user_id, habit_marked, pantry_deducted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, c.ID,
 		nullI(c.RecipeID), nullI(c.PlanID), c.Date, c.Servings, c.Notes, c.Rating, uid, boolInt(c.HabitMarked), c.PantryDeducted)
 	if err != nil {
 		return err
 	}
-	c.ID, _ = res.LastInsertId()
 	return core.Commit(tx, after...)
 }
 
@@ -105,12 +108,15 @@ func (s *Store) CreatePurchase(ctx context.Context, uid int64, p *Purchase, afte
 		return ErrNotFound
 	}
 	p.UserID = &uid
-	res, err := tx.ExecContext(ctx, `INSERT INTO purchases (list_id, list_name, date, store, amount, currency, items, item_names, paid_by, split_group_id, split_expense_id, pantry_restocked, notes, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	p.ID, err = reserveResourceID(ctx, tx, "purchases")
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO purchases (id, list_id, list_name, date, store, amount, currency, items, item_names, paid_by, split_group_id, split_expense_id, pantry_restocked, notes, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.ID,
 		nullI(p.ListID), p.ListName, p.Date, p.Store, p.Amount, p.Currency, p.Items, p.ItemNames, p.PaidBy, p.SplitGroupID, p.SplitExpenseID, p.PantryRestocked, p.Notes, uid)
 	if err != nil {
 		return err
 	}
-	p.ID, _ = res.LastInsertId()
 	return core.Commit(tx, after...)
 }
 

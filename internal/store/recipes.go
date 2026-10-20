@@ -127,14 +127,18 @@ func (s *Store) CreateRecipe(ctx context.Context, uid int64, r *Recipe) error {
 	if r.Nutrition == nil {
 		r.Nutrition = map[string]string{}
 	}
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO recipes (title, description, servings, prep_minutes, cook_minutes, course, cuisine, tags, source_url, source_name, rating, favorite, notes, photo_path, image_url, ingredients, steps, nutrition, times_cooked, last_cooked, archived, created_by, user_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	var err error
+	r.ID, err = reserveResourceID(ctx, s.DB, "recipes")
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.ExecContext(ctx, `INSERT INTO recipes (id, title, description, servings, prep_minutes, cook_minutes, course, cuisine, tags, source_url, source_name, rating, favorite, notes, photo_path, image_url, ingredients, steps, nutrition, times_cooked, last_cooked, archived, created_by, user_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.ID,
 		r.Title, r.Description, r.Servings, r.PrepMinutes, r.CookMinutes, r.Course, r.Cuisine, r.Tags, r.SourceURL, r.SourceName, r.Rating, boolInt(r.Favorite), r.Notes, r.PhotoPath, r.ImageURL,
 		jsonStr(r.Ingredients), jsonStr(r.Steps), jsonStr(r.Nutrition), r.TimesCooked, r.LastCooked, boolInt(r.Archived), nullI(r.CreatedBy), uid)
 	if err != nil {
 		return err
 	}
-	r.ID, _ = res.LastInsertId()
 	nr, err := s.GetRecipe(ctx, uid, r.ID)
 	if err == nil {
 		*r = *nr

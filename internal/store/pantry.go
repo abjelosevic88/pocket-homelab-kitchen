@@ -169,12 +169,15 @@ func (s *Store) CreatePantry(ctx context.Context, uid int64, p *PantryItem, afte
 	if uid <= 0 {
 		return ErrNotFound
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO pantry (inventory_id, name, quantity, unit, min_quantity, location, category, barcode, brand, expiry_date, notes, photo_url, archived, synced_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	p.ID, err = reserveResourceID(ctx, tx, "pantry")
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO pantry (id, inventory_id, name, quantity, unit, min_quantity, location, category, barcode, brand, expiry_date, notes, photo_url, archived, synced_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.ID,
 		nullI(p.InventoryID), strings.TrimSpace(p.Name), p.Quantity, p.Unit, p.MinQuantity, p.Location, p.Category, strings.TrimSpace(p.Barcode), p.Brand, p.ExpiryDate, p.Notes, p.PhotoURL, boolInt(p.Archived), p.SyncedAt, uid)
 	if err != nil {
 		return conflict(err)
 	}
-	p.ID, _ = res.LastInsertId()
 	np, err := scanPantry(tx.QueryRowContext(ctx, `SELECT `+pantryCols+` FROM pantry WHERE id=? AND user_id=?`, p.ID, uid))
 	if err == nil {
 		*p = *np

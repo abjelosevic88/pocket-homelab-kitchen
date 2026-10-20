@@ -62,11 +62,15 @@ func (s *Store) CreateList(ctx context.Context, uid int64, l *List) error {
 	if uid <= 0 {
 		return ErrNotFound
 	}
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO lists (name, store, sort_order, user_id) VALUES (?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM lists WHERE user_id = ?), ?)`, strings.TrimSpace(l.Name), strings.TrimSpace(l.Store), uid, uid)
+	var err error
+	l.ID, err = reserveResourceID(ctx, s.DB, "lists")
 	if err != nil {
 		return err
 	}
-	l.ID, _ = res.LastInsertId()
+	_, err = s.DB.ExecContext(ctx, `INSERT INTO lists (id, name, store, sort_order, user_id) VALUES (?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM lists WHERE user_id = ?), ?)`, l.ID, strings.TrimSpace(l.Name), strings.TrimSpace(l.Store), uid, uid)
+	if err != nil {
+		return err
+	}
 	nl, err := s.GetList(ctx, uid, l.ID)
 	if err == nil {
 		*l = *nl

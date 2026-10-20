@@ -223,4 +223,15 @@ func TestPantryCreateReplayPrecedesBarcodeUniquenessCheck(t *testing.T) {
 	if code != 409 {
 		t.Fatal("conflict", code)
 	}
+	if _, err := lk.st.DB.Exec(`DELETE FROM pantry WHERE id=?`, int64(first["id"].(float64))); err != nil {
+		t.Fatal(err)
+	}
+	replacement := lk.ok(lk.aliceTok, "POST", "/api/v1/pantry", map[string]any{"name": "New milk", "local": true})
+	if replacement["id"].(float64) <= first["id"].(float64) {
+		t.Fatal("deleted pantry ID reused")
+	}
+	if code, _ := call(body); code != 404 {
+		t.Fatal("receipt resolved to replacement pantry item", code)
+	}
+
 }
