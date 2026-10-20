@@ -9,13 +9,27 @@ export class ApiError extends Error {
   }
 }
 
+// Keep a write's key after a lost response so pressing Retry cannot repeat it.
+const pendingWrites = new Map<string, string>()
+function operationKey(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(24)), b => b.toString(16).padStart(2, '0')).join('')
+}
+
 async function request<T>(method: string, url: string, body?: unknown, raw = false): Promise<T> {
   const init: RequestInit = { method, headers: {}, credentials: 'same-origin' }
   if (body !== undefined) {
     ;(init.headers as Record<string, string>)['Content-Type'] = 'application/json'
     init.body = JSON.stringify(body)
   }
+  const retryable = method === 'POST' && (/\/(cook|checkout|adjust)$/.test(url) || url.endsWith('/pantry'))
+  const signature = retryable ? url + '\n' + (init.body ?? '') : ''
+  if (retryable) {
+    const key = pendingWrites.get(signature) ?? operationKey()
+    pendingWrites.set(signature, key)
+    ;(init.headers as Record<string, string>)['Idempotency-Key'] = key
+  }
   const res = await fetch(url, init)
+  if (retryable && (res.ok || (res.status >= 400 && res.status < 500))) pendingWrites.delete(signature)
   if (res.status === 401 && !url.includes('/auth/')) {
     window.dispatchEvent(new CustomEvent('pk:unauthorized'))
   }

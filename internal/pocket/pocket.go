@@ -31,7 +31,7 @@ func New(baseURL, token string, timeout time.Duration) *Client {
 // Configured reports whether URL and token are set.
 func (c *Client) Configured() bool { return c != nil && c.BaseURL != "" && c.Token != "" }
 
-func (c *Client) do(ctx context.Context, method, path string, q url.Values, body any, v any) error {
+func (c *Client) do(ctx context.Context, method, path string, q url.Values, body any, v any, operation ...string) error {
 	if !c.Configured() {
 		return errors.New("not configured")
 	}
@@ -55,6 +55,9 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, body
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if len(operation) > 0 {
+		req.Header.Set("Idempotency-Key", operation[0])
 	}
 	res, err := c.HTTP.Do(req)
 	if err != nil {
@@ -215,9 +218,9 @@ type ItemInput struct {
 }
 
 // CreateItem creates an inventory item.
-func (c *Client) CreateItem(ctx context.Context, in ItemInput) (*Item, error) {
+func (c *Client) CreateItem(ctx context.Context, in ItemInput, operation ...string) (*Item, error) {
 	var it Item
-	if err := c.do(ctx, http.MethodPost, "/api/v1/items", nil, in, &it); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/api/v1/items", nil, in, &it, operation...); err != nil {
 		return nil, err
 	}
 	return &it, nil
@@ -233,18 +236,18 @@ func (c *Client) UpdateItem(ctx context.Context, id int64, in map[string]any) (*
 }
 
 // AdjustItem changes the quantity by delta with a movement note.
-func (c *Client) AdjustItem(ctx context.Context, id int64, delta float64, note string) (*Item, error) {
+func (c *Client) AdjustItem(ctx context.Context, id int64, delta float64, note string, operation ...string) (*Item, error) {
 	var it Item
-	if err := c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v1/items/%d/adjust", id), nil, map[string]any{"delta": delta, "note": note}, &it); err != nil {
+	if err := c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v1/items/%d/adjust", id), nil, map[string]any{"delta": delta, "note": note}, &it, operation...); err != nil {
 		return nil, err
 	}
 	return &it, nil
 }
 
 // SetItemQuantity sets an absolute quantity.
-func (c *Client) SetItemQuantity(ctx context.Context, id int64, qty float64, note string) (*Item, error) {
+func (c *Client) SetItemQuantity(ctx context.Context, id int64, qty float64, note string, operation ...string) (*Item, error) {
 	var it Item
-	if err := c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v1/items/%d/adjust", id), nil, map[string]any{"quantity": qty, "note": note}, &it); err != nil {
+	if err := c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v1/items/%d/adjust", id), nil, map[string]any{"quantity": qty, "note": note}, &it, operation...); err != nil {
 		return nil, err
 	}
 	return &it, nil
@@ -356,7 +359,7 @@ type Expense struct {
 }
 
 // CreateExpense posts an expense split evenly between every member.
-func (c *Client) CreateExpense(ctx context.Context, g *Group, in ExpenseInput) (*Expense, error) {
+func (c *Client) CreateExpense(ctx context.Context, g *Group, in ExpenseInput, operation ...string) (*Expense, error) {
 	if in.SplitMode == "" {
 		in.SplitMode = "even"
 	}
@@ -369,7 +372,7 @@ func (c *Client) CreateExpense(ctx context.Context, g *Group, in ExpenseInput) (
 		}
 	}
 	var e Expense
-	if err := c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v1/groups/%d/expenses", g.ID), nil, in, &e); err != nil {
+	if err := c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v1/groups/%d/expenses", g.ID), nil, in, &e, operation...); err != nil {
 		return nil, err
 	}
 	return &e, nil

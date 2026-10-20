@@ -1,12 +1,13 @@
 package server
 
 import (
+	"database/sql"
 	"fmt"
+	core "github.com/abjelosevic88/pocket-homelab-core/sdk"
 	"net/http"
 	"strings"
 
 	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/currency"
-	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/pocket"
 	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/store"
 	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/units"
 )
@@ -441,6 +442,30 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	s.workflowMu.Lock()
+	defer s.workflowMu.Unlock()
+	operation, err := core.NewOperation(fmt.Sprintf("%d:checkout:%d", actorID(ctx), l.ID), r.Header.Get("Idempotency-Key"), in)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if id, found, err := s.replayWorkflow(ctx, operation); err != nil {
+		s.fail(w, err, "read checkout")
+		return
+	} else if found {
+		var wf kitchenWorkflow
+		if err := s.loadWorkflow(ctx, id, &wf); err != nil || wf.Checkout == nil {
+			s.fail(w, fmt.Errorf("invalid checkout receipt"), "checkout")
+			return
+		}
+		s.drainActions(ctx, actorID(ctx))
+		if !s.workflowResult(ctx, id, wf.Checkout) {
+			wf.Checkout.Warnings = append(wf.Checkout.Warnings, "Purchase saved; integration updates are pending and will retry automatically.")
+		}
+		writeJSON(w, 200, wf.Checkout)
+		return
+	}
+
 	if in.Date == "" {
 		in.Date = store.Today()
 	}
@@ -473,18 +498,6 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := &checkoutResult{Restocked: []string{}, Created: []string{}, Warnings: []string{}}
-	restock := in.Restock == nil || *in.Restock
-	if restock {
-		for _, it := range bought {
-			name, warn := s.restockItem(r, cl, it)
-			if warn != "" {
-				res.Warnings = append(res.Warnings, warn)
-			}
-			if name != "" {
-				res.Restocked = append(res.Restocked, name)
-			}
-		}
-	}
 	// sum line prices when no total was typed
 	if in.Amount == 0 {
 		for _, it := range bought {
@@ -503,106 +516,52 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	if uid > 0 {
 		p.UserID = &uid
 	}
-	if in.Split && in.Amount > 0 {
-		sp, err := cl.split(ctx, scopeGroupsRead, scopeExpensesWrite)
-		switch {
-		case err != nil:
-			res.Warnings = append(res.Warnings, err.Error())
-		case cl.st.SplitGroupID == 0:
-			res.Warnings = append(res.Warnings, "Pocket Split is not set up: pick a group in Settings → Integrations")
-		default:
-			g, err := sp.client.Group(ctx, cl.st.SplitGroupID)
-			if err != nil {
-				res.Warnings = append(res.Warnings, "Pocket Split: "+err.Error())
-			} else {
-				paidBy := in.PaidBy
-				if paidBy == 0 {
-					paidBy = cl.st.SplitMemberID
-				}
-				if paidBy == 0 && len(g.Members) > 0 {
-					paidBy = g.Members[0].ID
-				}
-				cat := in.Category
-				if cat == "" {
-					cat = cl.st.SplitCategory
-				}
-				title := "Groceries"
-				if p.Store != "" {
-					title += " · " + p.Store
-				}
-				notes := p.ItemNames
-				if len(notes) > 900 {
-					notes = notes[:900] + "…"
-				}
-				e, err := sp.client.CreateExpense(ctx, g, pocket.ExpenseInput{Title: title, Amount: in.Amount, Currency: in.Currency, PaidBy: paidBy, Date: in.Date, Category: cat, Notes: notes})
-				if err != nil {
-					res.Warnings = append(res.Warnings, "Pocket Split: "+err.Error())
-				} else {
-					p.SplitGroupID, p.SplitExpenseID = g.ID, e.ID
-					for _, m := range g.Members {
-						if m.ID == paidBy {
-							p.PaidBy = m.Name
-						}
-					}
-					res.SplitURL = fmt.Sprintf("%s/groups/%d", strings.TrimRight(sp.public, "/"), g.ID)
-				}
+	res.Purchase = *p
+	wf := kitchenWorkflow{Checkout: res}
+	if in.Restock == nil || *in.Restock {
+		for _, it := range bought {
+			step, warn := s.prepareRestock(r, cl, it)
+			if warn != "" {
+				res.Warnings = append(res.Warnings, warn)
+			}
+			if step != nil {
+				wf.Steps = append(wf.Steps, *step)
 			}
 		}
 	}
-	if err := s.store.CreatePurchase(ctx, actorID(ctx), p); err != nil {
+	if err := s.prepareSplit(ctx, cl, in, p, &wf); err != nil {
+		if isNotConnected(err) {
+			res.Warnings = append(res.Warnings, err.Error())
+		} else {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	}
+	var actionID string
+	if err := s.store.CreatePurchase(ctx, uid, p, func(tx *sql.Tx) error {
+		if in.Remove == nil || *in.Remove {
+			for _, it := range bought {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM list_items WHERE id=? AND list_id=? AND checked=1`, it.ID, l.ID); err != nil {
+					return err
+				}
+			}
+		}
+		res.Purchase = *p
+		var err error
+		actionID, err = core.QueueAction(ctx, tx, uid, "kitchen.workflow", wf)
+		if err != nil {
+			return err
+		}
+		return operation.Save(ctx, tx, actionID)
+	}); err != nil {
 		s.fail(w, err, "save purchase")
 		return
 	}
-	if in.Remove == nil || *in.Remove {
-		_, _ = s.store.DeleteCheckedItems(ctx, actorID(ctx), l.ID)
+	s.drainActions(ctx, uid)
+	if !s.workflowResult(ctx, actionID, res) {
+		res.Warnings = append(res.Warnings, "Purchase saved; integration updates are pending and will retry automatically.")
+		res.List, _ = s.store.GetList(ctx, uid, l.ID)
 	}
-	res.Purchase = *p
-	res.List, _ = s.store.GetList(ctx, actorID(ctx), l.ID)
-	s.publish("kitchen.checkout", fmt.Sprintf("list:%d", l.ID), map[string]any{
-		"user_email": userFrom(ctx).Email, "list_id": l.ID, "list": l.Name, "amount": in.Amount, "currency": in.Currency, "date": in.Date, "store": in.Store,
-	})
-	writeJSON(w, http.StatusOK, res)
-}
 
-// restockItem adds a bought line to the pantry: tops up the matching row
-// (through Inventory when mirrored) or creates a new one.
-func (s *Server) restockItem(r *http.Request, cl *clients, it store.ListItem) (string, string) {
-	ctx := r.Context()
-	var p *store.PantryItem
-	var err error
-	if it.PantryID != nil {
-		p, err = s.store.GetPantry(ctx, actorID(ctx), *it.PantryID)
-	}
-	if p == nil || err != nil {
-		p, err = s.store.FindPantryByName(ctx, actorID(ctx), it.Name)
-	}
-	qty := it.Qty
-	if qty <= 0 {
-		qty = 1
-	}
-	if err == nil && p != nil {
-		if p.Archived {
-			p.Archived = false
-			if p.InventoryID != nil {
-				if inv, _ := cl.inventory(ctx, scopeItemsWrite); inv != nil {
-					_, _ = inv.client.UpdateItem(ctx, *p.InventoryID, map[string]any{"tags": cl.st.InventoryTag})
-				}
-			}
-		}
-		delta := qty
-		if conv, ok := units.Convert(qty, it.Unit, p.Unit); ok {
-			delta = conv
-		} else if it.Unit != "" && p.Unit != "" && units.Normalize(it.Unit) != units.Normalize(p.Unit) {
-			return "", fmt.Sprintf("%s: bought in %s, pantry counts %s — added 1", it.Name, it.Unit, p.Unit)
-		}
-		if err := s.adjustPantry(r, cl, p, delta, "Bought ("+it.Name+")"); err != nil {
-			return "", p.Name + ": " + err.Error()
-		}
-		return fmt.Sprintf("%s (%s)", p.Name, units.FormatZero(p.Quantity, p.Unit)), ""
-	}
-	np := &store.PantryItem{Name: it.Name, Quantity: qty, Unit: units.Normalize(it.Unit), Location: cl.st.InventoryLocation, Category: it.Aisle}
-	if err := s.createPantry(r, cl, np); err != nil {
-		return "", it.Name + ": " + err.Error()
-	}
-	return fmt.Sprintf("%s (new, %s)", np.Name, units.Format(np.Quantity, np.Unit)), ""
+	writeJSON(w, http.StatusOK, res)
 }

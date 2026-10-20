@@ -33,14 +33,16 @@ var Version = "dev"
 
 // Server holds dependencies.
 type Server struct {
-	cfg      *config.Config
-	store    *store.Store
-	log      *slog.Logger
-	webFS    fs.FS
-	started  time.Time
-	requests atomic.Int64
-	errors   atomic.Int64
-	off      *foodfacts.Client
+	actionMu   sync.Mutex
+	workflowMu sync.Mutex
+	cfg        *config.Config
+	store      *store.Store
+	log        *slog.Logger
+	webFS      fs.FS
+	started    time.Time
+	requests   atomic.Int64
+	errors     atomic.Int64
+	off        *foodfacts.Client
 
 	syncMu    sync.Mutex
 	syncing   map[int64]bool   // per user: a pantry sync is running
@@ -118,6 +120,7 @@ func (s *Server) Bootstrap(ctx context.Context) error {
 	}
 	_ = s.store.PurgeSessions(ctx)
 	go s.janitor(ctx)
+	go s.actionsLoop(ctx)
 	if s.core.Configured() {
 		go s.coreLoop(ctx)
 	}
@@ -439,7 +442,7 @@ func (s *Server) fail(w http.ResponseWriter, err error, context string) {
 	case errors.Is(err, store.ErrNotFound):
 		writeErr(w, http.StatusNotFound, "not found")
 		return
-	case errors.Is(err, store.ErrConflict):
+	case errors.Is(err, store.ErrConflict), errors.Is(err, core.ErrOperationConflict):
 		writeErr(w, http.StatusConflict, "already exists")
 		return
 	}
@@ -554,16 +557,6 @@ func (s *Server) registerWithCore(ctx context.Context) error {
 }
 
 // publish persists an event locally; the SDK retries network delivery.
-func (s *Server) publish(topic, subject string, payload map[string]any) {
-	if !s.core.Configured() {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := s.core.Publish(ctx, topic, subject, payload); err != nil {
-		s.log.Warn("pocket core: outbox enqueue failed", "topic", topic, "err", err)
-	}
-}
 
 // resolveSibling asks Core where a sibling app lives (cached a minute) so the
 // *_URL settings may stay empty on a box with Core.

@@ -1,8 +1,10 @@
 package server
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	core "github.com/abjelosevic88/pocket-homelab-core/sdk"
 	"net/http"
 	"strings"
 
@@ -24,6 +26,29 @@ type cookResult struct {
 // Inventory when the row mirrors an item) and marks the "cooked at home" habit.
 func (s *Server) cook(r *http.Request, rc *store.Recipe, in cookInput) (*cookResult, error) {
 	ctx := r.Context()
+	s.workflowMu.Lock()
+	defer s.workflowMu.Unlock()
+	operation, err := core.NewOperation(fmt.Sprintf("%d:cook:%d", actorID(ctx), rc.ID), r.Header.Get("Idempotency-Key"), in)
+	if err != nil {
+		return nil, err
+	}
+	if id, found, err := s.replayWorkflow(ctx, operation); err != nil {
+		return nil, err
+	} else if found {
+		var wf kitchenWorkflow
+		if err := s.loadWorkflow(ctx, id, &wf); err != nil {
+			return nil, err
+		}
+		if wf.Cook == nil {
+			return nil, fmt.Errorf("invalid cook receipt")
+		}
+		s.drainActions(ctx, actorID(ctx))
+		if !s.workflowResult(ctx, id, wf.Cook) {
+			wf.Cook.Warnings = append(wf.Cook.Warnings, "Cook saved; integration updates are pending and will retry automatically.")
+		}
+		return wf.Cook, nil
+	}
+
 	if in.Date == "" {
 		in.Date = store.Today()
 	}
@@ -48,23 +73,9 @@ func (s *Server) cook(r *http.Request, rc *store.Recipe, in cookInput) (*cookRes
 			c.PlanID = &in.PlanID
 		}
 	}
-	if err := s.store.CreateCook(ctx, actorID(ctx), c); err != nil {
-		return nil, err
-	}
-	_ = s.store.MarkCooked(ctx, actorID(ctx), rc.ID, in.Date)
-	if in.Rating > 0 {
-		rc.Rating = in.Rating
-		_ = s.store.UpdateRecipe(ctx, actorID(ctx), rc)
-	}
-	if in.PlanID > 0 {
-		if p, err := s.store.GetPlan(ctx, actorID(ctx), in.PlanID); err == nil {
-			p.CookedAt = store.Now()
-			p.CookID = &c.ID
-			_ = s.store.UpdatePlan(ctx, actorID(ctx), p)
-		}
-	}
-	res := &cookResult{Cook: *c, Deducted: []string{}, NotInPantry: []string{}, Warnings: []string{}}
-	cl := s.clients(ctx, actorID(ctx))
+	res := &cookResult{Cook: *c, Recipe: *rc, Deducted: []string{}, NotInPantry: []string{}, Warnings: []string{}}
+	cl := s.clients(ctx, uid)
+	wf := kitchenWorkflow{Cook: res}
 	factor := 1.0
 	if rc.Servings > 0 {
 		factor = float64(in.Servings) / float64(rc.Servings)
@@ -77,10 +88,10 @@ func (s *Server) cook(r *http.Request, rc *store.Recipe, in cookInput) (*cookRes
 			var p *store.PantryItem
 			var err error
 			if ing.PantryID > 0 {
-				p, err = s.store.GetPantry(ctx, actorID(ctx), ing.PantryID)
+				p, err = s.store.GetPantry(ctx, uid, ing.PantryID)
 			}
 			if p == nil || err != nil {
-				p, err = s.store.FindPantryByName(ctx, actorID(ctx), ing.Name)
+				p, err = s.store.FindPantryByName(ctx, uid, ing.Name)
 			}
 			if err != nil || p == nil || p.Archived {
 				if !ing.Optional {
@@ -90,45 +101,39 @@ func (s *Server) cook(r *http.Request, rc *store.Recipe, in cookInput) (*cookRes
 			}
 			need, ok := units.Convert(ing.Qty*factor, ing.Unit, p.Unit)
 			if !ok {
-				res.Warnings = append(res.Warnings, fmt.Sprintf("%s: %s is not convertible to the pantry's %s", ing.Name, units.Format(ing.Qty*factor, ing.Unit), orPcs(p.Unit)))
+				res.Warnings = append(res.Warnings, fmt.Sprintf("%s: %s cannot convert to %s", ing.Name, ing.Unit, p.Unit))
 				continue
 			}
-			delta := -need
-			if p.Quantity+delta < 0 {
-				delta = -p.Quantity
-			}
-			if delta == 0 {
-				res.Warnings = append(res.Warnings, p.Name+" was already at 0")
-				continue
-			}
-			if err := s.adjustPantry(r, cl, p, delta, "Cooked "+rc.Title); err != nil {
-				res.Warnings = append(res.Warnings, p.Name+": "+err.Error())
-				continue
-			}
-			res.Deducted = append(res.Deducted, fmt.Sprintf("%s %s (%s left)", units.Format(-delta, p.Unit), p.Name, units.FormatZero(p.Quantity, p.Unit)))
+			wf.Steps = append(wf.Steps, pantryWork{PantryID: p.ID, InventoryID: p.InventoryID, Delta: -need, Note: "Cooked " + rc.Title})
 		}
 	}
-	if habit && cl.st.HabitID > 0 {
-		if hb, err := cl.habits(ctx, scopeEntriesWrite); err != nil {
-			if !isNotConnected(err) {
-				res.Warnings = append(res.Warnings, err.Error())
-			}
-		} else if err := hb.client.MarkHabit(ctx, cl.st.HabitID, in.Date, 1); err != nil {
-			res.Warnings = append(res.Warnings, "Pocket Habits: "+err.Error())
-		} else {
-			res.HabitMarked = true
+	if habit {
+		wf.HabitID = cl.st.HabitID
+	}
+	var actionID string
+	if err := s.store.CreateCook(ctx, uid, c, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE recipes SET times_cooked=times_cooked+1,last_cooked=CASE WHEN last_cooked<? THEN ? ELSE last_cooked END,rating=CASE WHEN ?>0 THEN ? ELSE rating END,updated_at=? WHERE id=? AND user_id=?`, in.Date, in.Date, in.Rating, in.Rating, store.Now(), rc.ID, uid); err != nil {
+			return err
 		}
+		if c.PlanID != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE plan SET cooked_at=?,cook_id=? WHERE id=? AND user_id=?`, store.Now(), c.ID, *c.PlanID, uid); err != nil {
+				return err
+			}
+		}
+		res.Cook = *c
+		var err error
+		actionID, err = core.QueueAction(ctx, tx, uid, "kitchen.workflow", wf)
+		if err != nil {
+			return err
+		}
+		return operation.Save(ctx, tx, actionID)
+	}); err != nil {
+		return nil, err
 	}
-	_ = s.store.UpdateCookFlags(ctx, actorID(ctx), c.ID, res.HabitMarked, len(res.Deducted))
-	c.HabitMarked, c.PantryDeducted = res.HabitMarked, len(res.Deducted)
-	res.Cook = *c
-	if nr, err := s.store.GetRecipe(ctx, actorID(ctx), rc.ID); err == nil {
-		res.Recipe = *nr
+	s.drainActions(ctx, uid)
+	if !s.workflowResult(ctx, actionID, res) {
+		res.Warnings = append(res.Warnings, "Cook saved; integration updates are pending and will retry automatically.")
 	}
-	s.publish("kitchen.cooked", fmt.Sprintf("recipe:%d", rc.ID), map[string]any{
-		"user_email": userFrom(ctx).Email, "recipe_id": rc.ID, "recipe": rc.Title, "date": in.Date, "servings": in.Servings, "rating": in.Rating,
-		"deducted": res.Deducted, "habit_marked": res.HabitMarked, "cook_id": c.ID,
-	})
 	return res, nil
 }
 
@@ -137,31 +142,4 @@ func orPcs(u string) string {
 		return "pcs"
 	}
 	return u
-}
-
-// adjustPantry changes a pantry quantity, through Pocket Inventory when the
-// row mirrors an item; p is updated in place with the new quantity.
-func (s *Server) adjustPantry(r *http.Request, cl *clients, p *store.PantryItem, delta float64, note string) error {
-	ctx := r.Context()
-	var inv *siblingConn
-	if p.InventoryID != nil {
-		var err error
-		if inv, err = cl.inventory(ctx, scopeItemsAdjust); err != nil {
-			return err
-		}
-	}
-	if inv != nil {
-		it, err := inv.client.AdjustItem(ctx, *p.InventoryID, delta, note)
-		if err != nil {
-			return err
-		}
-		p.Quantity = it.Quantity
-		p.SyncedAt = store.Now()
-	} else {
-		p.Quantity += delta
-		if p.Quantity < 0 {
-			p.Quantity = 0
-		}
-	}
-	return s.store.UpdatePantry(ctx, actorID(ctx), p)
 }

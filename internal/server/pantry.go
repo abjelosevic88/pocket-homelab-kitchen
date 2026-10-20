@@ -1,11 +1,11 @@
 package server
 
 import (
-	"errors"
+	"fmt"
+	core "github.com/abjelosevic88/pocket-homelab-core/sdk"
 	"net/http"
 	"strings"
 
-	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/pocket"
 	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/store"
 	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/units"
 )
@@ -112,34 +112,29 @@ func applyPantry(p *store.PantryItem, in pantryInput) string {
 
 // createPantry stores a row and, when Pocket Inventory is connected, creates
 // the inventory item carrying the pantry tag and mirrors it.
-func (s *Server) createPantry(r *http.Request, cl *clients, p *store.PantryItem) error {
-	ctx := r.Context()
-	inv, err := cl.inventory(ctx, scopeItemsWrite)
+func (s *Server) createPantry(r *http.Request, cl *clients, p *store.PantryItem, op ...*core.Operation) error {
+	inv, err := cl.inventory(r.Context(), scopeItemsWrite)
 	if err != nil {
-		return errors.New("Pocket Inventory: " + err.Error())
+		return err
 	}
-	if inv != nil {
-		q := p.Quantity
-		mq := p.MinQuantity
-		in := pocket.ItemInput{Name: p.Name, Quantity: &q, Unit: p.Unit, MinQuantity: &mq, Barcode: p.Barcode, Brand: p.Brand, ExpiryDate: p.ExpiryDate, Notes: p.Notes, Tags: cl.st.InventoryTag, Location: p.Location, Category: p.Category}
-		if in.Location == "" {
-			in.Location = cl.st.InventoryLocation
-		}
-		it, err := inv.client.CreateItem(ctx, in)
-		if err != nil {
-			return errors.New("Pocket Inventory: " + err.Error())
-		}
-		p.InventoryID = &it.ID
-		p.Location, p.Category = it.Location, it.Category
-		p.SyncedAt = store.Now()
+	if p.Location == "" {
+		p.Location = cl.st.InventoryLocation
 	}
-	return s.store.CreatePantry(ctx, actorID(ctx), p)
+	return s.submitPantry(r, cl, p, pantryWork{Create: p, Mirror: inv != nil, Tags: cl.st.InventoryTag}, op...)
 }
 
 func (s *Server) handleCreatePantry(w http.ResponseWriter, r *http.Request) {
 	var in pantryInput
 	if err := decode(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	op, err := core.NewOperation(fmt.Sprintf("%d:pantry:create", actorID(r.Context())), r.Header.Get("Idempotency-Key"), in)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if s.replayPantry(w, r, op, http.StatusCreated) {
 		return
 	}
 	p := &store.PantryItem{Quantity: 1}
@@ -151,12 +146,15 @@ func (s *Server) handleCreatePantry(w http.ResponseWriter, r *http.Request) {
 	cl.noInventory = in.Local
 	if p.Barcode != "" {
 		if ex, err := s.store.GetPantryByBarcode(r.Context(), actorID(r.Context()), p.Barcode); err == nil && !ex.Archived {
+			if s.replayPantry(w, r, op, http.StatusCreated) {
+				return
+			}
 			writeErr(w, http.StatusConflict, "that barcode is already in the pantry as "+ex.Name)
 			return
 		}
 	}
-	if err := s.createPantry(r, cl, p); err != nil {
-		s.fail(w, err, "create pantry item")
+	if err := s.createPantry(r, cl, p, op); err != nil {
+		s.pantryFailure(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, p)
@@ -268,43 +266,33 @@ func (s *Server) handleAdjustPantry(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	op, err := core.NewOperation(fmt.Sprintf("%d:pantry:adjust:%d", actorID(r.Context()), p.ID), r.Header.Get("Idempotency-Key"), in)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if s.replayPantry(w, r, op, http.StatusOK) {
+		return
+	}
 	cl := s.clients(r.Context(), actorID(r.Context()))
 	note := strings.TrimSpace(in.Note)
 	if note == "" {
 		note = "Pocket Kitchen"
 	}
-	switch {
-	case in.Quantity != nil:
-		var inv *siblingConn
-		if p.InventoryID != nil {
-			if inv, err = cl.inventory(r.Context(), scopeItemsAdjust); err != nil {
-				writeErr(w, http.StatusBadGateway, err.Error())
-				return
-			}
-		}
-		if inv != nil {
-			it, err := inv.client.SetItemQuantity(r.Context(), *p.InventoryID, max(0, *in.Quantity), note)
-			if err != nil {
-				writeErr(w, http.StatusBadGateway, "Pocket Inventory: "+err.Error())
-				return
-			}
-			p.Quantity = it.Quantity
-			p.SyncedAt = store.Now()
-		} else {
-			p.Quantity = max(0, *in.Quantity)
-		}
-		if err := s.store.UpdatePantry(r.Context(), actorID(r.Context()), p); err != nil {
-			s.fail(w, err, "update pantry item")
-			return
-		}
-	case in.Delta != nil:
-		if err := s.adjustPantry(r, cl, p, *in.Delta, note); err != nil {
-			writeErr(w, http.StatusBadGateway, err.Error())
-			return
-		}
-	default:
-		writeErr(w, http.StatusBadRequest, "delta or quantity is required")
+	step := pantryWork{PantryID: p.ID, InventoryID: p.InventoryID, Note: note}
+	if in.Quantity != nil {
+		q := max(0, *in.Quantity)
+		step.Quantity = &q
+	} else if in.Delta != nil {
+		step.Delta = *in.Delta
+	} else {
+		writeErr(w, 400, "delta or quantity is required")
 		return
 	}
+	if err := s.submitPantry(r, cl, p, step, op); err != nil {
+		s.pantryFailure(w, err)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, p)
 }

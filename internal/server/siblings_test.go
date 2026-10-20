@@ -189,7 +189,7 @@ func newLinkKitchen(t *testing.T, env func(*config.Config, *linkKitchen)) *linkK
 	}
 	lk.cfg = cfg
 	st := openTestStore(t, cfg)
-	ctx := context.Background()
+	ctx := t.Context()
 	lk.alice = &store.User{Email: "alice@example.com", Name: "Alice", Role: "admin"}
 	lk.bob = &store.User{Email: "bob@example.com", Name: "Bob", Role: "member"}
 	_ = st.CreateUser(ctx, lk.alice)
@@ -272,7 +272,7 @@ func TestActingThroughCore(t *testing.T) {
 
 	// a new pantry row is created in Inventory with items:write
 	lk.ok(a, "POST", "/api/v1/pantry", map[string]any{"name": "Rice", "quantity": 1, "unit": "kg"})
-	want(t, "create core", lk.core.take(), "inventory items:write alice@example.com")
+	want(t, "create core", lk.core.take(), "inventory items:write alice@example.com", "inventory items:write alice@example.com")
 	want(t, "create inventory", lk.inv.take(), "pcx_inventory_items:write_alice@example.com POST /api/v1/items")
 
 	// cooking: one adjust token for the ingredients, entries:write for the habit
@@ -294,7 +294,7 @@ func TestActingThroughCore(t *testing.T) {
 	if co["split_url"] != "https://split.example/groups/1" || co["purchase"].(map[string]any)["split_expense_id"] != float64(55) {
 		t.Fatalf("checkout %v", co)
 	}
-	want(t, "checkout core", lk.core.take(), "split expenses:write+groups:read alice@example.com")
+	want(t, "checkout core", lk.core.take(), "split expenses:write+groups:read alice@example.com", "split expenses:write+groups:read alice@example.com")
 	want(t, "checkout split", lk.split.take(), "pcx_split_expenses:write+groups:read_alice@example.com GET /api/v1/groups/1",
 		"pcx_split_expenses:write+groups:read_alice@example.com POST /api/v1/groups/1/expenses")
 

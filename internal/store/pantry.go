@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	core "github.com/abjelosevic88/pocket-homelab-core/sdk"
 	"strings"
 	"time"
 )
@@ -159,26 +160,36 @@ func NormalizeName(s string) string {
 }
 
 // CreatePantry inserts a row.
-func (s *Store) CreatePantry(ctx context.Context, uid int64, p *PantryItem) error {
+func (s *Store) CreatePantry(ctx context.Context, uid int64, p *PantryItem, after ...core.CommitHook) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	if uid <= 0 {
 		return ErrNotFound
 	}
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO pantry (inventory_id, name, quantity, unit, min_quantity, location, category, barcode, brand, expiry_date, notes, photo_url, archived, synced_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	res, err := tx.ExecContext(ctx, `INSERT INTO pantry (inventory_id, name, quantity, unit, min_quantity, location, category, barcode, brand, expiry_date, notes, photo_url, archived, synced_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullI(p.InventoryID), strings.TrimSpace(p.Name), p.Quantity, p.Unit, p.MinQuantity, p.Location, p.Category, strings.TrimSpace(p.Barcode), p.Brand, p.ExpiryDate, p.Notes, p.PhotoURL, boolInt(p.Archived), p.SyncedAt, uid)
 	if err != nil {
 		return conflict(err)
 	}
 	p.ID, _ = res.LastInsertId()
-	np, err := s.GetPantry(ctx, uid, p.ID)
+	np, err := scanPantry(tx.QueryRowContext(ctx, `SELECT `+pantryCols+` FROM pantry WHERE id=? AND user_id=?`, p.ID, uid))
 	if err == nil {
 		*p = *np
 	}
-	return nil
+	return core.Commit(tx, after...)
 }
 
 // UpdatePantry saves a row.
-func (s *Store) UpdatePantry(ctx context.Context, uid int64, p *PantryItem) error {
-	res, err := s.DB.ExecContext(ctx, `UPDATE pantry SET inventory_id = ?, name = ?, quantity = ?, unit = ?, min_quantity = ?, location = ?, category = ?, barcode = ?, brand = ?, expiry_date = ?, notes = ?, photo_url = ?, archived = ?, updated_at = ?, synced_at = ? WHERE id = ? AND user_id = ?`,
+func (s *Store) UpdatePantry(ctx context.Context, uid int64, p *PantryItem, after ...core.CommitHook) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE pantry SET inventory_id = ?, name = ?, quantity = ?, unit = ?, min_quantity = ?, location = ?, category = ?, barcode = ?, brand = ?, expiry_date = ?, notes = ?, photo_url = ?, archived = ?, updated_at = ?, synced_at = ? WHERE id = ? AND user_id = ?`,
 		nullI(p.InventoryID), strings.TrimSpace(p.Name), p.Quantity, p.Unit, p.MinQuantity, p.Location, p.Category, strings.TrimSpace(p.Barcode), p.Brand, p.ExpiryDate, p.Notes, p.PhotoURL, boolInt(p.Archived), Now(), p.SyncedAt, p.ID, uid)
 	if err != nil {
 		return conflict(err)
@@ -186,11 +197,11 @@ func (s *Store) UpdatePantry(ctx context.Context, uid int64, p *PantryItem) erro
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	np, err := s.GetPantry(ctx, uid, p.ID)
+	np, err := scanPantry(tx.QueryRowContext(ctx, `SELECT `+pantryCols+` FROM pantry WHERE id=? AND user_id=?`, p.ID, uid))
 	if err == nil {
 		*p = *np
 	}
-	return nil
+	return core.Commit(tx, after...)
 }
 
 // DeletePantry removes a row.

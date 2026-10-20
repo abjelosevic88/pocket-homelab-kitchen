@@ -1,6 +1,9 @@
 package store
 
-import "context"
+import (
+	"context"
+	core "github.com/abjelosevic88/pocket-homelab-core/sdk"
+)
 
 const cookCols = `c.id, c.recipe_id, c.plan_id, c.date, c.servings, c.notes, c.rating, c.user_id, c.habit_marked, c.pantry_deducted, c.created_at, COALESCE(r.title, ''), COALESCE(u.name, u.email, '')`
 
@@ -15,18 +18,23 @@ func scanCook(row interface{ Scan(...any) error }) (*Cook, error) {
 }
 
 // CreateCook inserts a cook-log row owned by uid.
-func (s *Store) CreateCook(ctx context.Context, uid int64, c *Cook) error {
+func (s *Store) CreateCook(ctx context.Context, uid int64, c *Cook, after ...core.CommitHook) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	if uid <= 0 {
 		return ErrNotFound
 	}
 	c.UserID = &uid
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO cooklog (recipe_id, plan_id, date, servings, notes, rating, user_id, habit_marked, pantry_deducted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	res, err := tx.ExecContext(ctx, `INSERT INTO cooklog (recipe_id, plan_id, date, servings, notes, rating, user_id, habit_marked, pantry_deducted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullI(c.RecipeID), nullI(c.PlanID), c.Date, c.Servings, c.Notes, c.Rating, uid, boolInt(c.HabitMarked), c.PantryDeducted)
 	if err != nil {
 		return err
 	}
 	c.ID, _ = res.LastInsertId()
-	return nil
+	return core.Commit(tx, after...)
 }
 
 // UpdateCookFlags records what the integrations did.
@@ -87,18 +95,23 @@ func (s *Store) CookStats(ctx context.Context, uid int64) (month, year int, days
 }
 
 // CreatePurchase inserts a checkout owned by uid.
-func (s *Store) CreatePurchase(ctx context.Context, uid int64, p *Purchase) error {
+func (s *Store) CreatePurchase(ctx context.Context, uid int64, p *Purchase, after ...core.CommitHook) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	if uid <= 0 {
 		return ErrNotFound
 	}
 	p.UserID = &uid
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO purchases (list_id, list_name, date, store, amount, currency, items, item_names, paid_by, split_group_id, split_expense_id, pantry_restocked, notes, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	res, err := tx.ExecContext(ctx, `INSERT INTO purchases (list_id, list_name, date, store, amount, currency, items, item_names, paid_by, split_group_id, split_expense_id, pantry_restocked, notes, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullI(p.ListID), p.ListName, p.Date, p.Store, p.Amount, p.Currency, p.Items, p.ItemNames, p.PaidBy, p.SplitGroupID, p.SplitExpenseID, p.PantryRestocked, p.Notes, uid)
 	if err != nil {
 		return err
 	}
 	p.ID, _ = res.LastInsertId()
-	return nil
+	return core.Commit(tx, after...)
 }
 
 // ListPurchases returns the latest checkouts.
