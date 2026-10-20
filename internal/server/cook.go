@@ -108,8 +108,12 @@ func (s *Server) cook(r *http.Request, rc *store.Recipe, in cookInput) (*cookRes
 			res.Deducted = append(res.Deducted, fmt.Sprintf("%s %s (%s left)", units.Format(-delta, p.Unit), p.Name, units.FormatZero(p.Quantity, p.Unit)))
 		}
 	}
-	if habit && cl.habits.Configured() && cl.st.HabitID > 0 {
-		if err := cl.habits.MarkHabit(ctx, cl.st.HabitID, in.Date, 1); err != nil {
+	if habit && cl.st.HabitID > 0 {
+		if hb, err := cl.habits(ctx, scopeEntriesWrite); err != nil {
+			if !isNotConnected(err) {
+				res.Warnings = append(res.Warnings, err.Error())
+			}
+		} else if err := hb.client.MarkHabit(ctx, cl.st.HabitID, in.Date, 1); err != nil {
 			res.Warnings = append(res.Warnings, "Pocket Habits: "+err.Error())
 		} else {
 			res.HabitMarked = true
@@ -137,10 +141,17 @@ func orPcs(u string) string {
 
 // adjustPantry changes a pantry quantity, through Pocket Inventory when the
 // row mirrors an item; p is updated in place with the new quantity.
-func (s *Server) adjustPantry(r *http.Request, cl clients, p *store.PantryItem, delta float64, note string) error {
+func (s *Server) adjustPantry(r *http.Request, cl *clients, p *store.PantryItem, delta float64, note string) error {
 	ctx := r.Context()
-	if p.InventoryID != nil && cl.inventory.Configured() {
-		it, err := cl.inventory.AdjustItem(ctx, *p.InventoryID, delta, note)
+	var inv *siblingConn
+	if p.InventoryID != nil {
+		var err error
+		if inv, err = cl.inventory(ctx, scopeItemsAdjust); err != nil {
+			return err
+		}
+	}
+	if inv != nil {
+		it, err := inv.client.AdjustItem(ctx, *p.InventoryID, delta, note)
 		if err != nil {
 			return err
 		}

@@ -39,16 +39,26 @@ func mask(s string) string {
 	return s[:4] + "••••" + s[len(s)-4:]
 }
 
-func (s *Server) publicSettings(st store.Settings) map[string]any {
+// publicSettings is what one person sees: their settings with the tokens
+// masked and, per Pocket app, the mode in effect (inventory_mode), whether it
+// works and how (inventory_via: core | direct | "") and why not (_detail).
+func (s *Server) publicSettings(ctx context.Context, u *store.User, st store.Settings) map[string]any {
+	invMode, invVia, invDetail := s.connStatus(ctx, u, st, appInventory)
+	splitMode, splitVia, splitDetail := s.connStatus(ctx, u, st, appSplit)
+	habitsMode, habitsVia, habitsDetail := s.connStatus(ctx, u, st, appHabits)
 	return map[string]any{
+		"core_configured": s.core.Configured(),
+		"inventory_mode":  invMode, "inventory_via": invVia, "inventory_detail": invDetail,
+		"split_mode": splitMode, "split_via": splitVia, "split_detail": splitDetail,
+		"habits_mode": habitsMode, "habits_via": habitsVia, "habits_detail": habitsDetail,
 		"title": st.Title, "home_currency": st.HomeCurrency, "date_format": st.DateFormat, "time_format": st.TimeFormat, "week_start": st.WeekStart, "default_servings": st.DefaultServings,
 		"notify_url": st.NotifyURL, "notify_format": st.NotifyFormat, "notify_hour": st.NotifyHour, "notify_plan": st.NotifyPlan, "notify_expiry": st.NotifyExpiry, "notify_configured": st.NotifyURL != "",
 		"inventory_url": st.InventoryURL, "inventory_token": mask(st.InventoryToken), "inventory_tag": st.InventoryTag, "inventory_location": st.InventoryLocation, "inventory_auto_sync": st.InventoryAutoSync,
-		"inventory_configured": st.InventoryURL != "" && st.InventoryToken != "",
+		"inventory_configured": invVia != "",
 		"split_url":            st.SplitURL, "split_token": mask(st.SplitToken), "split_public_url": st.SplitPublicURL, "split_group_id": st.SplitGroupID, "split_member_id": st.SplitMemberID, "split_category": st.SplitCategory,
-		"split_configured": st.SplitURL != "" && st.SplitToken != "" && st.SplitGroupID > 0,
+		"split_configured": splitVia != "" && st.SplitGroupID > 0,
 		"habits_url":       st.HabitsURL, "habits_token": mask(st.HabitsToken), "habit_id": st.HabitID,
-		"habits_configured": st.HabitsURL != "" && st.HabitsToken != "" && st.HabitID > 0,
+		"habits_configured": habitsVia != "" && st.HabitID > 0,
 		"food_facts":        st.FoodFacts, "max_upload_bytes": s.cfg.MaxUploadBytes, "setup_complete": st.SetupComplete, "base_url": s.cfg.BaseURL,
 	}
 }
@@ -59,7 +69,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err, "settings")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.publicSettings(st))
+	writeJSON(w, http.StatusOK, s.publicSettings(r.Context(), userFrom(r.Context()), st))
 }
 
 // handlePutSettings saves the caller's personal settings (preferences,
@@ -162,6 +172,14 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if keys["habit_id"] {
 		cur.HabitID = max(0, in.HabitID)
 	}
+	mode := func(k string, dst *string, v string) {
+		if keys[k] && (v == modeCore || v == modeDirect || v == modeOff) {
+			*dst = v
+		}
+	}
+	mode("inventory_mode", &cur.InventoryMode, in.InventoryMode)
+	mode("split_mode", &cur.SplitMode, in.SplitMode)
+	mode("habits_mode", &cur.HabitsMode, in.HabitsMode)
 	if keys["food_facts"] && isAdmin {
 		cur.FoodFacts = in.FoodFacts
 	}
@@ -175,7 +193,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, s.publicSettings(cur))
+	writeJSON(w, http.StatusOK, s.publicSettings(r.Context(), me, cur))
 }
 
 // handleIntegrationTest checks a connection with the caller's own saved
@@ -209,32 +227,53 @@ func (s *Server) handleIntegrationTest(w http.ResponseWriter, r *http.Request) {
 	var msg string
 	var err error
 	switch in.Which {
-	case "inventory":
-		c := pocket.New(urlOr(st.InventoryURL), keyOr(st.InventoryToken), 15*time.Second)
+	case "inventory", "split", "habits":
+		var a pocketApp
+		for _, x := range pocketApps {
+			if x.slug == in.Which {
+				a = x
+			}
+		}
+		mode, savedURL, savedTok, _ := connSettings(st, a)
+		typed := in.Key != "" && !strings.Contains(in.Key, "••")
+		var conn *siblingConn
+		// a token typed into the form is tried as is; otherwise the saved mode decides
+		if tok := keyOr(savedTok); tok != "" && (typed || s.connMode(mode, savedTok) == modeDirect) {
+			base := urlOr(savedURL)
+			if base == "" {
+				base = s.resolveSibling(ctx, a.slug)
+			}
+			conn = &siblingConn{client: pocket.New(base, tok, 15*time.Second), via: modeDirect}
+		} else {
+			cl := s.clients(ctx, actorID(ctx))
+			// the scopes the read side of the integration needs
+			read := map[string]string{"inventory": scopeItemsRead, "split": scopeGroupsRead, "habits": scopeHabitsRead}[a.slug]
+			conn, err = cl.conn(ctx, a, read)
+		}
+		if err != nil {
+			break
+		}
+		how := "direct connection"
+		if conn.via == modeCore {
+			how = "through Pocket Core"
+		}
 		var v string
-		v, err = c.Health(ctx)
-		if err == nil {
+		if v, err = conn.client.Health(ctx); err != nil {
+			break
+		}
+		switch a.slug {
+		case "inventory":
 			var items []pocket.Item
-			items, err = c.ItemsByTag(ctx, st.InventoryTag)
-			msg = fmt.Sprintf("Pocket Inventory %s, %d items tagged “%s”", v, len(items), st.InventoryTag)
-		}
-	case "split":
-		c := pocket.New(urlOr(st.SplitURL), keyOr(st.SplitToken), 15*time.Second)
-		var v string
-		v, err = c.Health(ctx)
-		if err == nil {
+			items, err = conn.client.ItemsByTag(ctx, st.InventoryTag)
+			msg = fmt.Sprintf("Pocket Inventory %s, %s, %d items tagged “%s”", v, how, len(items), st.InventoryTag)
+		case "split":
 			var gs []pocket.Group
-			gs, err = c.Groups(ctx)
-			msg = fmt.Sprintf("Pocket Split %s, %d groups", v, len(gs))
-		}
-	case "habits":
-		c := pocket.New(urlOr(st.HabitsURL), keyOr(st.HabitsToken), 15*time.Second)
-		var v string
-		v, err = c.Health(ctx)
-		if err == nil {
+			gs, err = conn.client.Groups(ctx)
+			msg = fmt.Sprintf("Pocket Split %s, %s, %d groups", v, how, len(gs))
+		case "habits":
 			var hs []pocket.Habit
-			hs, err = c.Habits(ctx)
-			msg = fmt.Sprintf("Pocket Habits %s, %d habits", v, len(hs))
+			hs, err = conn.client.Habits(ctx)
+			msg = fmt.Sprintf("Pocket Habits %s, %s, %d habits", v, how, len(hs))
 		}
 	case "notify":
 		f := in.Format
@@ -261,25 +300,33 @@ func (s *Server) handleIntegrationTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": msg})
 }
 
+// The pickers in Settings list through whichever connection is in effect;
+// without one they are empty.
+
 func (s *Server) handleSplitGroups(w http.ResponseWriter, r *http.Request) {
 	cl := s.clients(r.Context(), actorID(r.Context()))
-	if !cl.split.Configured() {
+	sp, err := optional(cl.split(r.Context(), scopeGroupsRead))
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if sp == nil {
 		writeJSON(w, http.StatusOK, []pocket.Group{})
 		return
 	}
-	gs, err := cl.split.Groups(r.Context())
+	gs, err := sp.client.Groups(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "Pocket Split: "+err.Error())
 		return
 	}
-	// groups come without members in the list; fetch the chosen one (and the rest lazily)
+	// groups come without members in the list; fetch them one by one
 	out := make([]pocket.Group, 0, len(gs))
 	for _, g := range gs {
 		if g.Archived {
 			continue
 		}
 		if len(g.Members) == 0 {
-			if full, err := cl.split.Group(r.Context(), g.ID); err == nil {
+			if full, err := sp.client.Group(r.Context(), g.ID); err == nil {
 				g = *full
 			}
 		}
@@ -290,11 +337,16 @@ func (s *Server) handleSplitGroups(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSplitCategories(w http.ResponseWriter, r *http.Request) {
 	cl := s.clients(r.Context(), actorID(r.Context()))
-	if !cl.split.Configured() {
+	sp, err := optional(cl.split(r.Context(), scopeGroupsRead))
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if sp == nil {
 		writeJSON(w, http.StatusOK, []string{})
 		return
 	}
-	cats, err := cl.split.Categories(r.Context())
+	cats, err := sp.client.Categories(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "Pocket Split: "+err.Error())
 		return
@@ -307,11 +359,16 @@ func (s *Server) handleSplitCategories(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHabitsList(w http.ResponseWriter, r *http.Request) {
 	cl := s.clients(r.Context(), actorID(r.Context()))
-	if !cl.habits.Configured() {
+	hb, err := optional(cl.habits(r.Context(), scopeHabitsRead))
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if hb == nil {
 		writeJSON(w, http.StatusOK, []pocket.Habit{})
 		return
 	}
-	hs, err := cl.habits.Habits(r.Context())
+	hs, err := hb.client.Habits(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "Pocket Habits: "+err.Error())
 		return
@@ -324,11 +381,16 @@ func (s *Server) handleHabitsList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleInventoryLocations(w http.ResponseWriter, r *http.Request) {
 	cl := s.clients(r.Context(), actorID(r.Context()))
-	if !cl.inventory.Configured() {
+	inv, err := cl.inventory(r.Context(), scopeItemsRead)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if inv == nil {
 		writeJSON(w, http.StatusOK, []pocket.Named{})
 		return
 	}
-	ls, err := cl.inventory.Locations(r.Context())
+	ls, err := inv.client.Locations(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "Pocket Inventory: "+err.Error())
 		return

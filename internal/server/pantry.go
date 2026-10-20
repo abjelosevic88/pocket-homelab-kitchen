@@ -112,16 +112,20 @@ func applyPantry(p *store.PantryItem, in pantryInput) string {
 
 // createPantry stores a row and, when Pocket Inventory is connected, creates
 // the inventory item carrying the pantry tag and mirrors it.
-func (s *Server) createPantry(r *http.Request, cl clients, p *store.PantryItem) error {
+func (s *Server) createPantry(r *http.Request, cl *clients, p *store.PantryItem) error {
 	ctx := r.Context()
-	if cl.inventory.Configured() {
+	inv, err := cl.inventory(ctx, scopeItemsWrite)
+	if err != nil {
+		return errors.New("Pocket Inventory: " + err.Error())
+	}
+	if inv != nil {
 		q := p.Quantity
 		mq := p.MinQuantity
 		in := pocket.ItemInput{Name: p.Name, Quantity: &q, Unit: p.Unit, MinQuantity: &mq, Barcode: p.Barcode, Brand: p.Brand, ExpiryDate: p.ExpiryDate, Notes: p.Notes, Tags: cl.st.InventoryTag, Location: p.Location, Category: p.Category}
 		if in.Location == "" {
 			in.Location = cl.st.InventoryLocation
 		}
-		it, err := cl.inventory.CreateItem(ctx, in)
+		it, err := inv.client.CreateItem(ctx, in)
 		if err != nil {
 			return errors.New("Pocket Inventory: " + err.Error())
 		}
@@ -144,9 +148,7 @@ func (s *Server) handleCreatePantry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cl := s.clients(r.Context(), actorID(r.Context()))
-	if in.Local {
-		cl.inventory = pocket.New("", "", 0)
-	}
+	cl.noInventory = in.Local
 	if p.Barcode != "" {
 		if ex, err := s.store.GetPantryByBarcode(r.Context(), actorID(r.Context()), p.Barcode); err == nil && !ex.Archived {
 			writeErr(w, http.StatusConflict, "that barcode is already in the pantry as "+ex.Name)
@@ -177,7 +179,14 @@ func (s *Server) handleUpdatePantry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cl := s.clients(r.Context(), actorID(r.Context()))
-	if p.InventoryID != nil && cl.inventory.Configured() {
+	var inv *siblingConn
+	if p.InventoryID != nil {
+		if inv, err = cl.inventory(r.Context(), scopeItemsWrite); err != nil {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	}
+	if inv != nil {
 		patch := map[string]any{"name": p.Name, "unit": p.Unit, "min_quantity": p.MinQuantity, "barcode": p.Barcode, "brand": p.Brand, "expiry_date": p.ExpiryDate, "notes": p.Notes}
 		if p.Location != before.Location {
 			patch["location"] = p.Location
@@ -189,7 +198,7 @@ func (s *Server) handleUpdatePantry(w http.ResponseWriter, r *http.Request) {
 			patch["quantity"] = p.Quantity
 			patch["note"] = "Set in Pocket Kitchen"
 		}
-		if it, err := cl.inventory.UpdateItem(r.Context(), *p.InventoryID, patch); err != nil {
+		if it, err := inv.client.UpdateItem(r.Context(), *p.InventoryID, patch); err != nil {
 			writeErr(w, http.StatusBadGateway, "Pocket Inventory: "+err.Error())
 			return
 		} else {
@@ -197,7 +206,7 @@ func (s *Server) handleUpdatePantry(w http.ResponseWriter, r *http.Request) {
 			p.SyncedAt = store.Now()
 		}
 		if in.Archived != nil && *in.Archived && !before.Archived {
-			_ = cl.inventory.ArchiveItem(r.Context(), *p.InventoryID)
+			_ = inv.client.ArchiveItem(r.Context(), *p.InventoryID)
 		}
 	}
 	if err := s.store.UpdatePantry(r.Context(), actorID(r.Context()), p); err != nil {
@@ -216,11 +225,15 @@ func (s *Server) handleDeletePantry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cl := s.clients(r.Context(), actorID(r.Context()))
-	if p.InventoryID != nil && cl.inventory.Configured() {
+	if p.InventoryID != nil {
 		if r.URL.Query().Get("inventory") == "archive" {
-			_ = cl.inventory.ArchiveItem(r.Context(), *p.InventoryID)
-		} else if it, err := cl.inventory.GetItem(r.Context(), *p.InventoryID); err == nil {
-			_, _ = cl.inventory.UpdateItem(r.Context(), *p.InventoryID, map[string]any{"tags": removeTag(it.Tags, cl.st.InventoryTag)})
+			if inv, _ := cl.inventory(r.Context(), scopeItemsWrite); inv != nil {
+				_ = inv.client.ArchiveItem(r.Context(), *p.InventoryID)
+			}
+		} else if inv, _ := cl.inventory(r.Context(), scopeItemsRead, scopeItemsWrite); inv != nil {
+			if it, err := inv.client.GetItem(r.Context(), *p.InventoryID); err == nil {
+				_, _ = inv.client.UpdateItem(r.Context(), *p.InventoryID, map[string]any{"tags": removeTag(it.Tags, cl.st.InventoryTag)})
+			}
 		}
 	}
 	if err := s.store.DeletePantry(r.Context(), actorID(r.Context()), p.ID); err != nil {
@@ -262,8 +275,15 @@ func (s *Server) handleAdjustPantry(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case in.Quantity != nil:
-		if p.InventoryID != nil && cl.inventory.Configured() {
-			it, err := cl.inventory.SetItemQuantity(r.Context(), *p.InventoryID, max(0, *in.Quantity), note)
+		var inv *siblingConn
+		if p.InventoryID != nil {
+			if inv, err = cl.inventory(r.Context(), scopeItemsAdjust); err != nil {
+				writeErr(w, http.StatusBadGateway, err.Error())
+				return
+			}
+		}
+		if inv != nil {
+			it, err := inv.client.SetItemQuantity(r.Context(), *p.InventoryID, max(0, *in.Quantity), note)
 			if err != nil {
 				writeErr(w, http.StatusBadGateway, "Pocket Inventory: "+err.Error())
 				return

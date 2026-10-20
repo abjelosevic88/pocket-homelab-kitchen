@@ -4,6 +4,19 @@ Base path `/api/v1`. JSON in and out. Authenticate with the session cookie (brow
 
 Everything is per person: every recipe, plan entry, list, list line, pantry row, cook and checkout belongs to the account that created it, and every endpoint only sees the caller's own rows (someone else's id answers `404`). API tokens and Pocket Core tokens act as the account they belong to.
 
+### Pocket Core app links
+
+Another Pocket app may call Kitchen for a person with a `pcx_` token Pocket Core issued to it (see [links.md](https://github.com/abjelosevic88/pocket-homelab-core/blob/main/docs/links.md)). Kitchen offers one scope:
+
+| Scope | Name | Routes |
+|---|---|---|
+| (any link) | | GET `/auth/me` |
+| `cooklog:read` | See what you cooked | GET `/cooklog` |
+
+Every other route answers `403` to a link token, and it only ever sees the person's own cooks. Pocket Day uses it for the journal.
+
+Kitchen itself acts in Pocket Inventory (`items:read`, `items:write`, `items:adjust`), Pocket Split (`groups:read`, `expenses:write`) and Pocket Habits (`habits:read`, `entries:write`) when the person chose **Pocket Core** for that app, asking Core for a fresh token with just the scopes each action needs.
+
 ## Auth & account
 | Method | Path | Notes |
 |---|---|---|
@@ -12,7 +25,7 @@ Everything is per person: every recipe, plan entry, list, list line, pantry row,
 | GET/PUT | `/auth/me` | profile, password change |
 | GET/POST/DELETE | `/tokens`, `/tokens/{id}` | personal access tokens |
 | GET/POST/PUT/DELETE | `/users`, `/users/{id}` | admin (a member's GET lists only themselves); deleting a user deletes their kitchen |
-| GET/PUT | `/settings` · GET `/settings/system` | your own settings and integrations (secrets masked; a masked value means "keep"); `title` / `food_facts` are box-wide and only taken from an admin |
+| GET/PUT | `/settings` · GET `/settings/system` | your own settings and integrations (secrets masked; a masked value means "keep"); `title` / `food_facts` are box-wide and only taken from an admin. Per Pocket app (`inventory`, `split`, `habits`): `*_mode` `core\|direct\|off` (PUT to choose; the default is `direct` with a saved token, else `core` on a box with Pocket Core), `*_via` `core\|direct\|""` (how it works right now, `""` = not connected), `*_detail` (why not, or which link scopes are off); `core_configured`. Clearing `*_url` + `*_token` is Disconnect |
 | GET | `/meta` · `/currencies` | lists the UI uses |
 | GET | `/dashboard` | for a Homepage widget: `today`, `tomorrow`, `shopping_open`, `pantry_low`, `pantry_expiring`, `cooked_month`, `spend_month_text`… |
 | GET | `/home` | everything the home page shows |
@@ -72,8 +85,8 @@ Everything is per person: every recipe, plan entry, list, list line, pantry row,
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/cooklog?recipe=&limit=` · DELETE `/cooklog/{id}` | |
-| POST | `/integrations/test` | `{which: inventory\|split\|habits\|notify\|foodfacts, url?, key?}` |
-| GET | `/split/groups` · `/split/categories` · `/habits/list` · `/inventory/locations` | pass-through lists for the settings page |
+| POST | `/integrations/test` | `{which: inventory\|split\|habits\|notify\|foodfacts, url?, key?}`; a typed token is tried directly, otherwise the saved mode decides (Pocket Core or direct) |
+| GET | `/split/groups` · `/split/categories` · `/habits/list` · `/inventory/locations` | pass-through lists for the settings page, through whichever connection is in effect (empty without one) |
 | POST | `/notify/test` · `/notify/run` | send a test / today's message now |
 
 ## Homepage widget

@@ -2,7 +2,14 @@ export interface User { id: number; email: string; name: string; role: 'admin' |
 export interface APIToken { id: number; user_id: number; name: string; prefix: string; last_used_at: string | null; created_at: string }
 export interface Currency { code: string; name: string; decimals: number }
 
+export type ConnMode = 'core' | 'direct' | 'off'
+export type ConnVia = '' | 'core' | 'direct'
+
 export interface Settings {
+  core_configured: boolean
+  inventory_mode: ConnMode; inventory_via: ConnVia; inventory_detail: string
+  split_mode: ConnMode; split_via: ConnVia; split_detail: string
+  habits_mode: ConnMode; habits_via: ConnVia; habits_detail: string
   title: string; home_currency: string; date_format: string; time_format: string; week_start: 'mon' | 'sun'; default_servings: number
   notify_url: string; notify_format: string; notify_hour: number; notify_plan: boolean; notify_expiry: boolean; notify_configured: boolean
   inventory_url: string; inventory_token: string; inventory_tag: string; inventory_location: string; inventory_auto_sync: boolean; inventory_configured: boolean

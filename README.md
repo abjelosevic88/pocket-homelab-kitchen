@@ -54,7 +54,7 @@ Nothing on my server did recipes, a meal plan or a shopping list, and every app 
 | **Shopping** | Several lists; quick-add parsing (“2 kg potatoes”, “eggs x12”); lines merged by name and unit family; aisle guessed from the name; optional line prices; add every low pantry item in one go; checkout with total, store, restock, Pocket Split expense; purchase history. |
 | **Pantry** | Mirrors Pocket Inventory items with the pantry tag (every 30 min + on demand) or stands alone; quantity, unit, minimum (low), location, category, barcode, brand, best-before (expiring), notes; −/+ steppers; ingredient-name matching with plurals and descriptors (“large eggs” → Eggs). |
 | **Cooking** | Cook log with servings, notes and rating; pantry deduction with unit conversion (g/kg, ml/l/tsp/tbsp/cup); Pocket Habits mark; stats (cooked this month, days cooked out of 30). |
-| **Integrations** | Pocket Inventory, Pocket Split, Pocket Habits, Open Food Facts, Apprise / ntfy / webhook, Homepage dashboard endpoint, Prometheus `/metrics`. With **Pocket Core** on the box: registers itself, publishes `kitchen.cooked` and `kitchen.checkout`, accepts paired-phone tokens, finds its siblings without `*_URL` settings, and offers “Sign in with Pocket Core” on the login page with no configuration (any other OpenID Connect provider via `OIDC_*`). |
+| **Integrations** | Pocket Inventory, Pocket Split, Pocket Habits, Open Food Facts, Apprise / ntfy / webhook, Homepage dashboard endpoint, Prometheus `/metrics`. With **Pocket Core** on the box: registers itself, publishes `kitchen.cooked` and `kitchen.checkout`, accepts paired-phone tokens, reaches every person's own Inventory / Split / Habits through **app links** (nothing to paste), lets Pocket Day read the cook log the same way, and offers “Sign in with Pocket Core” on the login page with no configuration (any other OpenID Connect provider via `OIDC_*`). |
 | **Users & ops** | Built-in login (admin/member), SSO-proxy header, or no login on a trusted LAN. Every account has its own kitchen — recipes, plan, lists, pantry, history and integrations are per person; admins manage accounts, not other people's data. API tokens. SQLite backup from the UI/CLI/API, JSON export / merge-import. PWA with shortcuts for the list, the plan and the scanner. |
 
 ## Run it
@@ -78,13 +78,21 @@ Want to look around first? `DEMO_DATA=true AUTH_MODE=none` seeds eight recipes, 
 
 ### Integrations
 
-All optional, all under **Settings → Integrations**, and per person: each account connects its own Inventory / Split / Habits with its own tokens. The environment variables (see [docs/configuration.md](docs/configuration.md)) seed the first admin's (the owner's) connections only:
+All optional, all under **Settings → Integrations**, and per person. Each of Pocket Inventory, Split and Habits has a switch:
 
-- **Pocket Inventory** — URL + API token; pick the tag that marks pantry items and a default location for groceries the kitchen creates.
-- **Pocket Split** — URL + API token; pick the household group, who usually pays and the category.
-- **Pocket Habits** — URL + API token; pick the habit to mark when something is cooked.
+- **Pocket Core** — Kitchen acts as you in your own copy of the app through a Pocket Core [app link](https://github.com/abjelosevic88/pocket-homelab-core/blob/main/docs/links.md): for every action it asks Core for a five-minute token with only the scopes that action needs, and never keeps it, so switching the link off (Core → Links for the box, or Core → Settings → Apps acting for me for yourself) stops the next action. Nothing to paste. The default when Kitchen is connected to Core and you saved no token.
+- **Direct** — a URL and an API token you paste (how it always worked; the default when a token is saved, so existing tokens keep working until you switch). **Disconnect** removes them.
+- **Off** — Kitchen does not talk to the app at all.
+
+The status line under the switch says whether the connection works and why not; Test connection follows the chosen mode. The environment variables (see [docs/configuration.md](docs/configuration.md)) seed the first admin's (the owner's) direct connections, each value once, so one cleared in Settings stays cleared.
+
+- **Pocket Inventory** — pick the tag that marks pantry items and a default location for groceries the kitchen creates. Link scopes: `items:read`, `items:write`, `items:adjust`.
+- **Pocket Split** — pick the household group, who usually pays and the category. Link scopes: `groups:read`, `expenses:write`.
+- **Pocket Habits** — pick the habit to mark when something is cooked. Link scopes: `habits:read`, `entries:write`.
 - **Notifications** — an Apprise gateway endpoint, an ntfy topic URL or any JSON webhook; pick the hour.
 - **Open Food Facts** — on by default, no account needed.
+
+The other way round, Kitchen **offers** `cooklog:read` (“See what you cooked”) so Pocket Day can put what you cooked into your journal through Core, without a Kitchen token.
 
 ## Documentation
 

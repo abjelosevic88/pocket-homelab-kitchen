@@ -164,13 +164,20 @@ func (s *Server) handleCookPlan(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.UpdatePlan(r.Context(), actorID(r.Context()), p)
 		cl := s.clients(r.Context(), actorID(r.Context()))
 		marked := false
-		if (in.MarkHabit == nil || *in.MarkHabit) && cl.habits.Configured() && cl.st.HabitID > 0 {
-			if err := cl.habits.MarkHabit(r.Context(), cl.st.HabitID, in.Date, 1); err == nil {
+		warnings := []string{}
+		if (in.MarkHabit == nil || *in.MarkHabit) && cl.st.HabitID > 0 {
+			if hb, err := cl.habits(r.Context(), scopeEntriesWrite); err != nil {
+				if !isNotConnected(err) {
+					warnings = append(warnings, err.Error())
+				}
+			} else if err := hb.client.MarkHabit(r.Context(), cl.st.HabitID, in.Date, 1); err != nil {
+				warnings = append(warnings, "Pocket Habits: "+err.Error())
+			} else {
 				marked = true
 				_ = s.store.UpdateCookFlags(r.Context(), actorID(r.Context()), c.ID, true, 0)
 			}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"cook": c, "habit_marked": marked, "deducted": []string{}, "not_in_pantry": []string{}, "warnings": []string{}})
+		writeJSON(w, http.StatusOK, map[string]any{"cook": c, "habit_marked": marked, "deducted": []string{}, "not_in_pantry": []string{}, "warnings": warnings})
 		return
 	}
 	rc, err := s.store.GetRecipe(r.Context(), actorID(r.Context()), *p.RecipeID)

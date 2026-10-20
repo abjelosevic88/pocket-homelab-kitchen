@@ -137,6 +137,12 @@ func applySetting(st *Settings, k, v string) {
 		st.HabitsToken = v
 	case "habit_id":
 		st.HabitID, _ = strconv.ParseInt(v, 10, 64)
+	case "inventory_mode":
+		st.InventoryMode = v
+	case "split_mode":
+		st.SplitMode = v
+	case "habits_mode":
+		st.HabitsMode = v
 	case "food_facts":
 		st.FoodFacts = v != "0"
 	case "setup_complete":
@@ -172,6 +178,9 @@ func settingsKV(st Settings) map[string]string {
 		"habits_url":          st.HabitsURL,
 		"habits_token":        st.HabitsToken,
 		"habit_id":            strconv.FormatInt(st.HabitID, 10),
+		"inventory_mode":      st.InventoryMode,
+		"split_mode":          st.SplitMode,
+		"habits_mode":         st.HabitsMode,
 		"food_facts":          b[st.FoodFacts],
 		"setup_complete":      b[st.SetupComplete],
 	}

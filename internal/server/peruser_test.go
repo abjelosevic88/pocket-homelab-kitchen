@@ -55,10 +55,20 @@ func (sb *sibling) snapshot() []string {
 	return append([]string(nil), sb.calls...)
 }
 
-// fakeCore answers introspection for paired-device tokens.
+// fakeCore answers introspection for paired-device tokens; nobody has an
+// app link (Kitchen → Inventory / Split / Habits) here.
 func newFakeCore(t *testing.T, tokens map[string]string) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/links/token":
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, `{"error":"no link","reason":"not_in_audience"}`)
+			return
+		case "/api/v1/links/status":
+			io.WriteString(w, `[]`)
+			return
+		}
 		if r.URL.Path == "/api/v1/auth/introspect" {
 			var in struct {
 				Token string `json:"token"`

@@ -27,10 +27,11 @@ func (s *Server) syncPantry(ctx context.Context, uid int64) (map[string]int, err
 	defer func() { s.syncMu.Lock(); delete(s.syncing, uid); s.syncMu.Unlock() }()
 
 	cl := s.clients(ctx, uid)
-	if !cl.inventory.Configured() {
-		return nil, errors.New("Pocket Inventory is not configured")
+	inv, err := cl.conn(ctx, appInventory, scopeItemsRead)
+	if err != nil {
+		return nil, err
 	}
-	items, err := cl.inventory.ItemsByTag(ctx, cl.st.InventoryTag)
+	items, err := inv.client.ItemsByTag(ctx, cl.st.InventoryTag)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +51,7 @@ func (s *Server) syncPantry(ctx context.Context, uid int64) (map[string]int, err
 			} else {
 				id := it.ID
 				p = &store.PantryItem{InventoryID: &id}
-				fillPantry(p, it, cl.st)
+				fillPantry(p, it, inv.public)
 				if err := s.store.CreatePantry(ctx, uid, p); err != nil {
 					s.log.Warn("pantry sync: create", "item", it.Name, "err", err)
 					continue
@@ -61,7 +62,7 @@ func (s *Server) syncPantry(ctx context.Context, uid int64) (map[string]int, err
 		}
 		id := it.ID
 		p.InventoryID = &id
-		fillPantry(p, it, cl.st)
+		fillPantry(p, it, inv.public)
 		if err := s.store.UpdatePantry(ctx, uid, p); err != nil {
 			s.log.Warn("pantry sync: update", "item", it.Name, "err", err)
 			continue
@@ -77,11 +78,13 @@ func (s *Server) syncPantry(ctx context.Context, uid int64) (map[string]int, err
 // syncedKey is the cache key remembering a user's last pantry sync.
 func syncedKey(uid int64) string { return "pantry:synced_at:" + itoa64(uid) }
 
-func fillPantry(p *store.PantryItem, it pocket.Item, st store.Settings) {
+// fillPantry copies an Inventory item onto its mirror; photos link to the
+// Inventory the browser can reach.
+func fillPantry(p *store.PantryItem, it pocket.Item, public string) {
 	p.Name, p.Quantity, p.Unit, p.MinQuantity = it.Name, it.Quantity, units.Normalize(it.Unit), it.MinQuantity
 	p.Location, p.Category, p.Barcode, p.Brand, p.ExpiryDate, p.Notes = it.Location, it.Category, it.Barcode, it.Brand, it.ExpiryDate, it.Notes
 	if it.Photo != "" {
-		p.PhotoURL = strings.TrimRight(st.InventoryURL, "/") + "/api/v1/items/" + itoa64(it.ID) + "/photo"
+		p.PhotoURL = strings.TrimRight(public, "/") + "/api/v1/items/" + itoa64(it.ID) + "/photo"
 	}
 	p.Archived = false
 	p.SyncedAt = store.Now()
@@ -136,8 +139,10 @@ func (s *Server) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cl := s.clients(ctx, actorID(ctx))
-	if cl.inventory.Configured() {
-		if it, err := cl.inventory.LookupBarcode(ctx, code); err != nil {
+	if inv, err := cl.inventory(ctx, scopeItemsRead); err != nil {
+		out.Error = err.Error()
+	} else if inv != nil {
+		if it, err := inv.client.LookupBarcode(ctx, code); err != nil {
 			out.Error = "Pocket Inventory: " + err.Error()
 		} else if it != nil {
 			out.Source, out.Inventory = "inventory", it

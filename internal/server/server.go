@@ -25,8 +25,6 @@ import (
 	core "github.com/abjelosevic88/pocket-homelab-core/sdk"
 	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/config"
 	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/foodfacts"
-	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/notify"
-	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/pocket"
 	"github.com/abjelosevic88/pocket-homelab-kitchen/internal/store"
 )
 
@@ -133,31 +131,43 @@ func (s *Server) ownerReady(ctx context.Context, owner int64) error {
 		return err
 	}
 	changed := false
-	set := func(dst *string, v string) {
-		if *dst == "" && v != "" {
-			*dst = v
+	// Each value is copied once: clearing it in Settings (Disconnect, to move
+	// Inventory, Split or Habits over to Pocket Core) must not bring it back
+	// at the next start. A value already there counts as copied.
+	once := func(name string, empty bool, v string, apply func()) {
+		key := fmt.Sprintf("seeded:%d:%s", owner, name)
+		if _, _, done := s.store.CacheGet(ctx, key); done {
+			return
+		}
+		if empty && v != "" {
+			apply()
 			changed = true
+			empty = false
+		}
+		if !empty {
+			_ = s.store.CachePut(ctx, key, "1")
 		}
 	}
-	set(&st.NotifyURL, s.cfg.NotifyURL)
-	set(&st.InventoryURL, s.cfg.InventoryURL)
-	set(&st.InventoryToken, s.cfg.InventoryToken)
-	set(&st.SplitURL, s.cfg.SplitURL)
-	set(&st.SplitToken, s.cfg.SplitToken)
-	set(&st.SplitPublicURL, s.cfg.SplitPublicURL)
-	set(&st.HabitsURL, s.cfg.HabitsURL)
-	set(&st.HabitsToken, s.cfg.HabitsToken)
+	set := func(name string, dst *string, v string) {
+		once(name, *dst == "", v, func() { *dst = v })
+	}
+	set("NotifyURL", &st.NotifyURL, s.cfg.NotifyURL)
+	set("InventoryURL", &st.InventoryURL, s.cfg.InventoryURL)
+	set("InventoryToken", &st.InventoryToken, s.cfg.InventoryToken)
+	set("SplitURL", &st.SplitURL, s.cfg.SplitURL)
+	set("SplitToken", &st.SplitToken, s.cfg.SplitToken)
+	set("SplitPublicURL", &st.SplitPublicURL, s.cfg.SplitPublicURL)
+	set("HabitsURL", &st.HabitsURL, s.cfg.HabitsURL)
+	set("HabitsToken", &st.HabitsToken, s.cfg.HabitsToken)
 	if s.cfg.InventoryTag != "" && s.cfg.InventoryTag != "pantry" && st.InventoryTag == "pantry" {
 		st.InventoryTag = s.cfg.InventoryTag
 		changed = true
 	}
-	if s.cfg.SplitGroupID > 0 && st.SplitGroupID == 0 {
-		st.SplitGroupID = s.cfg.SplitGroupID
-		changed = true
+	if s.cfg.SplitGroupID > 0 {
+		once("SplitGroupID", st.SplitGroupID == 0, "1", func() { st.SplitGroupID = s.cfg.SplitGroupID })
 	}
-	if s.cfg.HabitID > 0 && st.HabitID == 0 {
-		st.HabitID = s.cfg.HabitID
-		changed = true
+	if s.cfg.HabitID > 0 {
+		once("HabitID", st.HabitID == 0, "1", func() { st.HabitID = s.cfg.HabitID })
 	}
 	if s.cfg.NotifyFormat != "" && st.NotifyURL == s.cfg.NotifyURL && st.NotifyFormat != s.cfg.NotifyFormat {
 		st.NotifyFormat = s.cfg.NotifyFormat
@@ -200,21 +210,34 @@ func (s *Server) janitor(ctx context.Context) {
 	}
 }
 
-// autoSync pulls the pantry for every user who connected their own Pocket
-// Inventory, each with their own token into their own pantry.
+// autoSync pulls the pantry for every person connected to their own Pocket
+// Inventory (their own token, or a Core link acting as them) into their own
+// pantry. People without a connection are skipped quietly.
 func (s *Server) autoSync(ctx context.Context) {
-	uids, err := s.store.SettingsUsers(ctx)
+	users, err := s.store.ListUsers(ctx)
 	if err != nil {
 		s.log.Warn("pantry sync: users", "err", err)
 		return
 	}
-	for _, uid := range uids {
-		st, _ := s.store.GetSettings(ctx, uid)
-		if !st.InventoryAutoSync || st.InventoryToken == "" {
+	for _, u := range users {
+		st, _ := s.store.GetSettings(ctx, u.ID)
+		if !st.InventoryAutoSync {
 			continue
 		}
-		if _, err := s.syncPantry(ctx, uid); err != nil {
-			s.log.Warn("pantry sync", "user", uid, "err", err)
+		switch s.connMode(st.InventoryMode, st.InventoryToken) {
+		case modeOff:
+			continue
+		case modeDirect:
+			if st.InventoryToken == "" {
+				continue
+			}
+		}
+		if _, err := s.syncPantry(ctx, u.ID); err != nil {
+			if isNotConnected(err) {
+				s.log.Debug("pantry sync skipped", "user", u.ID, "why", err)
+				continue
+			}
+			s.log.Warn("pantry sync", "user", u.ID, "err", err)
 		}
 	}
 }
@@ -249,38 +272,6 @@ func (s *Server) maybeNotify(ctx context.Context) {
 		if _, err := s.sendDaily(ctx, uid, false); err != nil {
 			s.log.Warn("daily notification", "user", uid, "err", err)
 		}
-	}
-}
-
-// ---- integration clients, built from the current settings ----
-
-type clients struct {
-	st        store.Settings
-	inventory *pocket.Client
-	split     *pocket.Client
-	habits    *pocket.Client
-	notify    *notify.Client
-}
-
-// clients builds the integration clients from ONE user's own settings: a
-// member who has not connected Inventory / Split / Habits gets unconfigured
-// clients, never the owner's tokens.
-func (s *Server) clients(ctx context.Context, uid int64) clients {
-	st, _ := s.store.GetSettings(ctx, uid)
-	if st.InventoryURL == "" && st.InventoryToken != "" {
-		st.InventoryURL = s.resolveSibling(ctx, "inventory")
-	}
-	if st.SplitURL == "" && st.SplitToken != "" {
-		st.SplitURL = s.resolveSibling(ctx, "split")
-	}
-	if st.HabitsURL == "" && st.HabitsToken != "" {
-		st.HabitsURL = s.resolveSibling(ctx, "habits")
-	}
-	return clients{st: st,
-		inventory: pocket.New(st.InventoryURL, st.InventoryToken, 15*time.Second),
-		split:     pocket.New(st.SplitURL, st.SplitToken, 15*time.Second),
-		habits:    pocket.New(st.HabitsURL, st.HabitsToken, 15*time.Second),
-		notify:    notify.New(st.NotifyURL, st.NotifyFormat),
 	}
 }
 
@@ -537,6 +528,8 @@ func (s *Server) registerWithCore(ctx context.Context) error {
 		Icon:        "/favicon.svg", Version: Version,
 		URL: s.cfg.CoreAppURL, PublicURL: s.cfg.BaseURL, HealthPath: "/healthz", EnvPrefix: "KITCHEN",
 		Publishes: []string{"kitchen.cooked", "kitchen.checkout"},
+		Offers:    linkOffers,
+		Uses:      linkUses(),
 	}
 	if s.cfg.BaseURL != "" {
 		// ask Core for a relying-party client so "Sign in with Pocket Core" needs no configuration

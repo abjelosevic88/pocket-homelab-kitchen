@@ -504,10 +504,14 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		p.UserID = &uid
 	}
 	if in.Split && in.Amount > 0 {
-		if !cl.split.Configured() || cl.st.SplitGroupID == 0 {
-			res.Warnings = append(res.Warnings, "Pocket Split is not set up (Settings → Integrations)")
-		} else {
-			g, err := cl.split.Group(ctx, cl.st.SplitGroupID)
+		sp, err := cl.split(ctx, scopeGroupsRead, scopeExpensesWrite)
+		switch {
+		case err != nil:
+			res.Warnings = append(res.Warnings, err.Error())
+		case cl.st.SplitGroupID == 0:
+			res.Warnings = append(res.Warnings, "Pocket Split is not set up: pick a group in Settings → Integrations")
+		default:
+			g, err := sp.client.Group(ctx, cl.st.SplitGroupID)
 			if err != nil {
 				res.Warnings = append(res.Warnings, "Pocket Split: "+err.Error())
 			} else {
@@ -530,7 +534,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 				if len(notes) > 900 {
 					notes = notes[:900] + "…"
 				}
-				e, err := cl.split.CreateExpense(ctx, g, pocket.ExpenseInput{Title: title, Amount: in.Amount, Currency: in.Currency, PaidBy: paidBy, Date: in.Date, Category: cat, Notes: notes})
+				e, err := sp.client.CreateExpense(ctx, g, pocket.ExpenseInput{Title: title, Amount: in.Amount, Currency: in.Currency, PaidBy: paidBy, Date: in.Date, Category: cat, Notes: notes})
 				if err != nil {
 					res.Warnings = append(res.Warnings, "Pocket Split: "+err.Error())
 				} else {
@@ -540,11 +544,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 							p.PaidBy = m.Name
 						}
 					}
-					base := cl.st.SplitPublicURL
-					if base == "" {
-						base = cl.st.SplitURL
-					}
-					res.SplitURL = fmt.Sprintf("%s/groups/%d", base, g.ID)
+					res.SplitURL = fmt.Sprintf("%s/groups/%d", strings.TrimRight(sp.public, "/"), g.ID)
 				}
 			}
 		}
@@ -566,7 +566,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 
 // restockItem adds a bought line to the pantry: tops up the matching row
 // (through Inventory when mirrored) or creates a new one.
-func (s *Server) restockItem(r *http.Request, cl clients, it store.ListItem) (string, string) {
+func (s *Server) restockItem(r *http.Request, cl *clients, it store.ListItem) (string, string) {
 	ctx := r.Context()
 	var p *store.PantryItem
 	var err error
@@ -583,8 +583,10 @@ func (s *Server) restockItem(r *http.Request, cl clients, it store.ListItem) (st
 	if err == nil && p != nil {
 		if p.Archived {
 			p.Archived = false
-			if p.InventoryID != nil && cl.inventory.Configured() {
-				_, _ = cl.inventory.UpdateItem(ctx, *p.InventoryID, map[string]any{"tags": cl.st.InventoryTag})
+			if p.InventoryID != nil {
+				if inv, _ := cl.inventory(ctx, scopeItemsWrite); inv != nil {
+					_, _ = inv.client.UpdateItem(ctx, *p.InventoryID, map[string]any{"tags": cl.st.InventoryTag})
+				}
 			}
 		}
 		delta := qty

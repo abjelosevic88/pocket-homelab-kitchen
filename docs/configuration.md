@@ -22,14 +22,14 @@ Everything is read from environment variables; every value has a default so a ba
 | `OIDC_AUTO_CREATE` | `true` | Give an unknown (verified) email a member account instead of refusing it. Always on for the Core-issued client |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | – | Create the first admin on an empty database (otherwise the UI asks) |
 | `DEFAULT_CURRENCY` | `EUR` | Home currency for grocery spend |
-| `INVENTORY_URL` / `INVENTORY_TOKEN` | – | Pocket Inventory base URL and an API token. These and the `SPLIT_*` / `HABITS_*` / `NOTIFY_*` values below are the owner's (first admin's) own connections; other accounts start unconnected and set their own under Settings → Integrations |
+| `INVENTORY_URL` / `INVENTORY_TOKEN` | – | Pocket Inventory base URL and an API token. These and the `SPLIT_*` / `HABITS_*` / `NOTIFY_*` values below are the owner's (first admin's) own direct connections, each copied once (clearing one in Settings keeps it cleared); other accounts set their own under Settings → Integrations, or use Pocket Core app links with nothing to paste |
 | `INVENTORY_TAG` | `pantry` | Inventory items carrying this tag are the pantry |
 | `SPLIT_URL` / `SPLIT_TOKEN` / `SPLIT_PUBLIC_URL` / `SPLIT_GROUP_ID` | – | Pocket Split (public URL = what the browser opens for the expense link) |
 | `HABITS_URL` / `HABITS_TOKEN` / `HABITS_HABIT_ID` | – | Pocket Habits and the habit to mark when something is cooked |
 | `NOTIFY_URL` / `NOTIFY_FORMAT` / `NOTIFY_HOUR` | – / guessed / `9` | Apprise `…/notify/<key>`, ntfy topic URL or JSON webhook; `apprise`, `ntfy`, `json`; hour of the daily message |
 | `OPENFOODFACTS` | `true` | Look up unknown barcodes on Open Food Facts |
 | `USER_AGENT` | `PocketKitchen/1.0 (…)` | Sent to recipe sites and Open Food Facts |
-| `CORE_URL` / `CORE_REGISTRATION_KEY` | – | [Pocket Core](https://git.bjelke.org/abjelosevic88/pocket-homelab-core): register on start (the key is needed once; the minted app token lives in `$DATA_DIR/core.token`), publish `kitchen.cooked` / `kitchen.checkout`, accept the tokens Core hands to paired phones, and resolve Inventory / Split / Habits through Core when their `*_URL` is empty |
+| `CORE_URL` / `CORE_REGISTRATION_KEY` | – | [Pocket Core](https://git.bjelke.org/abjelosevic88/pocket-homelab-core): register on start (the key is needed once; the minted app token lives in `$DATA_DIR/core.token`), publish `kitchen.cooked` / `kitchen.checkout`, accept the tokens Core hands to paired phones, resolve Inventory / Split / Habits through Core when their `*_URL` is empty, act in every person's own Inventory / Split / Habits through app links (Settings → Integrations → Pocket Core), and offer `cooklog:read` to Pocket Day |
 | `CORE_APP_URL` | `BASE_URL` | How Core reaches this app for health checks (e.g. `http://host.docker.internal:8176`) |
 | `DEMO_DATA` | `false` | Seed eight recipes, a pantry, a week's plan and a list on an empty database |
 

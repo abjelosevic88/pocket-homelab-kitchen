@@ -253,6 +253,12 @@ type Settings struct {
 	HabitsURL         string `json:"habits_url"`
 	HabitsToken       string `json:"habits_token"`
 	HabitID           int64  `json:"habit_id"`
-	FoodFacts         bool   `json:"food_facts"`
-	SetupComplete     bool   `json:"setup_complete"`
+	// How this person reaches each Pocket app: "core" (an app link through
+	// Pocket Core), "direct" (the URL + token above) or "off"; "" = not chosen
+	// yet (direct when a token is saved, else Pocket Core).
+	InventoryMode string `json:"inventory_mode"`
+	SplitMode     string `json:"split_mode"`
+	HabitsMode    string `json:"habits_mode"`
+	FoodFacts     bool   `json:"food_facts"`
+	SetupComplete bool   `json:"setup_complete"`
 }

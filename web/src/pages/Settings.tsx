@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { api, V1 } from '../lib/api'
 import { useApp } from '../lib/app-context'
-import type { APIToken, Habit, Settings as SettingsT, SplitGroup, User } from '../lib/types'
+import type { APIToken, ConnMode, Habit, Settings as SettingsT, SplitGroup, User } from '../lib/types'
 import { DATE_FORMATS, TIME_FORMATS, fmtBytes, fmtDateTime, type DateFormat, type TimeFormat } from '../lib/format'
 import { Card, Confirm, Field, Loading, Modal, PageHeader, Segmented, Tabs, useAsync, useToast } from '../components/ui'
 import { Select } from '../components/Select'
@@ -86,9 +86,13 @@ function Integrations() {
   const [cats, setCats] = useState<string[]>([])
   const [habits, setHabits] = useState<Habit[]>([])
   const [locs, setLocs] = useState<{ id: number; name: string }[]>([])
-  useEffect(() => { if (f?.split_url && f.split_token) { api.get<SplitGroup[]>(`${V1}/split/groups`).then(setGroups).catch(() => {}); api.get<string[]>(`${V1}/split/categories`).then(setCats).catch(() => {}) } }, [f?.split_url, f?.split_token]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (f?.habits_url && f.habits_token) api.get<Habit[]>(`${V1}/habits/list`).then(setHabits).catch(() => {}) }, [f?.habits_url, f?.habits_token]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (f?.inventory_configured) api.get<typeof locs>(`${V1}/inventory/locations`).then(setLocs).catch(() => {}) }, [f?.inventory_configured])
+  // the pickers list through whichever connection is in effect (Pocket Core or direct)
+  const splitKey = `${f?.split_mode}:${f?.split_via}:${f?.split_url}:${f?.split_token}`
+  const habitsKey = `${f?.habits_mode}:${f?.habits_via}:${f?.habits_url}:${f?.habits_token}`
+  const invKey = `${f?.inventory_mode}:${f?.inventory_via}`
+  useEffect(() => { setGroups([]); setCats([]); if (f?.split_via) { api.get<SplitGroup[]>(`${V1}/split/groups`).then(setGroups).catch(() => {}); api.get<string[]>(`${V1}/split/categories`).then(setCats).catch(() => {}) } }, [splitKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setHabits([]); if (f?.habits_via) api.get<Habit[]>(`${V1}/habits/list`).then(setHabits).catch(() => {}) }, [habitsKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setLocs([]); if (f?.inventory_via) api.get<typeof locs>(`${V1}/inventory/locations`).then(setLocs).catch(() => {}) }, [invKey]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!f) return <Loading />
   const run = async (which: string, url: string, key: string, extra: Record<string, string> = {}) => {
     setTest(t => ({ ...t, [which]: 'testing…' }))
@@ -100,47 +104,59 @@ function Integrations() {
   const notifyRun = async () => { try { const r = await api.post<{ ok: boolean; sent: number; error?: string }>(`${V1}/notify/run`); toast(r.ok ? (r.sent ? 'Sent' : 'Nothing to send today') : r.error || 'failed', r.ok ? 'ok' : 'err') } catch (e) { toast((e as Error).message, 'err') } }
   return (
     <div className="grid" style={{ gap: 16 }}>
-      <p className="muted small">These connections are yours: use your own tokens from Pocket Inventory, Split and Habits. Nobody else's pantry, groceries or habits are touched from your account, and yours are not touched from theirs.</p>
-      <Card title="📦 Pocket Inventory — the pantry" actions={badge(f.inventory_configured)}>
-        <p className="muted small">The pantry is the set of Inventory items carrying one tag. Cooking a recipe calls Inventory's adjust endpoint for each ingredient, a checkout tops items up or creates them with the tag, and a sync every 30 minutes pulls changes made in Inventory. Token from Pocket Inventory → Settings → API tokens.</p>
+      <p className="muted small">These connections are yours. Through <b>Pocket Core</b> Kitchen acts as you in your own Pocket Inventory, Split and Habits with nothing to paste (switch it off for yourself in Pocket Core → Settings → Apps acting for me); <b>Direct</b> uses a URL and an API token you enter. Nobody else's pantry, groceries or habits are touched from your account, and yours are not touched from theirs.</p>
+      <Card title="📦 Pocket Inventory — the pantry" actions={connBadge(f.inventory_mode, f.inventory_via)}>
+        <p className="muted small">The pantry is the set of Inventory items carrying one tag. Cooking a recipe calls Inventory's adjust endpoint for each ingredient, a checkout tops items up or creates them with the tag, and a sync every 30 minutes pulls changes made in Inventory.</p>
         <div className="grid" style={{ gap: 12 }}>
-          <div className="two-col tight">
-            <Field label="URL" help="Inside Docker use http://host.docker.internal:PORT or the service name."><input value={f.inventory_url} onChange={e => setF({ ...f, inventory_url: e.target.value })} placeholder="http://host.docker.internal:8170" /></Field>
-            <Field label="API token"><input value={f.inventory_token} onChange={e => setF({ ...f, inventory_token: e.target.value })} autoComplete="off" /></Field>
-          </div>
+          <Connection app="Pocket Inventory" mode={f.inventory_mode} via={f.inventory_via} detail={f.inventory_detail} core={f.core_configured} hasToken={!!f.inventory_token}
+            onMode={m => save({ inventory_mode: m })} onDisconnect={() => save({ inventory_url: '', inventory_token: '' })}
+            test={<><button className="btn sm" onClick={() => run('inventory', f.inventory_url, f.inventory_token)}>Test connection</button>{status('inventory')}</>}
+            direct={<div className="two-col tight">
+              <Field label="URL" help="Inside Docker use http://host.docker.internal:PORT or the service name."><input value={f.inventory_url} onChange={e => setF({ ...f, inventory_url: e.target.value })} placeholder="http://host.docker.internal:8170" /></Field>
+              <Field label="API token" help="Pocket Inventory → Settings → API tokens"><input value={f.inventory_token} onChange={e => setF({ ...f, inventory_token: e.target.value })} autoComplete="off" /></Field>
+            </div>} />
+          {f.inventory_mode !== 'off' && <>
           <div className="two-col tight">
             <Field label="Pantry tag" help="Items with this tag in Inventory are the pantry."><input value={f.inventory_tag} onChange={e => setF({ ...f, inventory_tag: e.target.value })} /></Field>
             <Field label="Default location for new items">{locs.length > 0 ? <Select value={f.inventory_location} onChange={v => setF({ ...f, inventory_location: v })} options={locs.map(l => ({ value: l.name, label: l.name }))} clearLabel="None" onCreate={v => v} /> : <input value={f.inventory_location} onChange={e => setF({ ...f, inventory_location: e.target.value })} placeholder="Kitchen" />}</Field>
           </div>
           <label className="row"><input type="checkbox" checked={f.inventory_auto_sync} onChange={e => setF({ ...f, inventory_auto_sync: e.target.checked })} style={{ width: 'auto' }} /> Sync the pantry from Inventory every 30 minutes</label>
-          <div className="row"><button className="btn sm" onClick={() => run('inventory', f.inventory_url, f.inventory_token)} disabled={!f.inventory_url}>Test connection</button>{status('inventory')}</div>
+          </>}
         </div>
       </Card>
-      <Card title="💸 Pocket Split — who paid for the groceries" actions={badge(f.split_configured)}>
+      <Card title="💸 Pocket Split — who paid for the groceries" actions={connBadge(f.split_mode, f.split_via)}>
         <p className="muted small">“Done shopping” can post the receipt as an expense in one group, split evenly between its members, with the bought items in the notes.</p>
         <div className="grid" style={{ gap: 12 }}>
-          <div className="two-col tight">
-            <Field label="URL"><input value={f.split_url} onChange={e => setF({ ...f, split_url: e.target.value })} placeholder="http://host.docker.internal:8172" /></Field>
-            <Field label="API token"><input value={f.split_token} onChange={e => setF({ ...f, split_token: e.target.value })} autoComplete="off" /></Field>
-          </div>
+          <Connection app="Pocket Split" mode={f.split_mode} via={f.split_via} detail={f.split_detail} core={f.core_configured} hasToken={!!f.split_token}
+            onMode={m => save({ split_mode: m })} onDisconnect={() => save({ split_url: '', split_token: '' })}
+            test={<><button className="btn sm" onClick={() => run('split', f.split_url, f.split_token)}>Test connection</button>{status('split')}</>}
+            direct={<div className="two-col tight">
+              <Field label="URL"><input value={f.split_url} onChange={e => setF({ ...f, split_url: e.target.value })} placeholder="http://host.docker.internal:8172" /></Field>
+              <Field label="API token" help="Pocket Split → Settings → API tokens"><input value={f.split_token} onChange={e => setF({ ...f, split_token: e.target.value })} autoComplete="off" /></Field>
+            </div>} />
+          {f.split_mode !== 'off' && <>
           <div className="three-col tight">
             <Field label="Group">{groups.length > 0 ? <Select value={String(f.split_group_id || '')} onChange={v => setF({ ...f, split_group_id: Number(v) })} options={groups.map(g => ({ value: String(g.id), label: g.name, hint: g.currency }))} placeholder="Pick a group" /> : <input type="number" value={f.split_group_id || ''} onChange={e => setF({ ...f, split_group_id: Number(e.target.value) })} placeholder="group id" />}</Field>
             <Field label="Usually paid by">{group ? <Select value={String(f.split_member_id || '')} onChange={v => setF({ ...f, split_member_id: Number(v) })} options={group.members.map(m => ({ value: String(m.id), label: m.name }))} placeholder="Ask each time" clearLabel="Ask each time" /> : <input type="number" value={f.split_member_id || ''} onChange={e => setF({ ...f, split_member_id: Number(e.target.value) })} placeholder="member id" />}</Field>
             <Field label="Category">{cats.length > 0 ? <Select value={f.split_category} onChange={v => setF({ ...f, split_category: v })} options={cats.map(c => ({ value: c, label: c }))} /> : <input value={f.split_category} onChange={e => setF({ ...f, split_category: e.target.value })} />}</Field>
           </div>
-          <Field label="Public URL (optional)" help="What the browser opens for the “Open in Split” link when the URL above is internal."><input value={f.split_public_url} onChange={e => setF({ ...f, split_public_url: e.target.value })} placeholder="https://split.example.com" /></Field>
-          <div className="row"><button className="btn sm" onClick={() => run('split', f.split_url, f.split_token)} disabled={!f.split_url}>Test connection</button>{status('split')}</div>
+          {f.split_mode === 'direct' && <Field label="Public URL (optional)" help="What the browser opens for the “Open in Split” link when the URL above is internal."><input value={f.split_public_url} onChange={e => setF({ ...f, split_public_url: e.target.value })} placeholder="https://split.example.com" /></Field>}
+          </>}
         </div>
       </Card>
-      <Card title="✅ Pocket Habits — cooked at home" actions={badge(f.habits_configured)}>
+      <Card title="✅ Pocket Habits — cooked at home" actions={connBadge(f.habits_mode, f.habits_via)}>
         <p className="muted small">Every “Cooked it” marks one habit as done for that day. Create a habit like “Cook at home” in Pocket Habits and pick it here.</p>
         <div className="grid" style={{ gap: 12 }}>
-          <div className="three-col tight">
-            <Field label="URL"><input value={f.habits_url} onChange={e => setF({ ...f, habits_url: e.target.value })} placeholder="http://host.docker.internal:8169" /></Field>
-            <Field label="API token"><input value={f.habits_token} onChange={e => setF({ ...f, habits_token: e.target.value })} autoComplete="off" /></Field>
+          <Connection app="Pocket Habits" mode={f.habits_mode} via={f.habits_via} detail={f.habits_detail} core={f.core_configured} hasToken={!!f.habits_token}
+            onMode={m => save({ habits_mode: m })} onDisconnect={() => save({ habits_url: '', habits_token: '' })}
+            test={<><button className="btn sm" onClick={() => run('habits', f.habits_url, f.habits_token)}>Test connection</button>{status('habits')}</>}
+            direct={<div className="two-col tight">
+              <Field label="URL"><input value={f.habits_url} onChange={e => setF({ ...f, habits_url: e.target.value })} placeholder="http://host.docker.internal:8169" /></Field>
+              <Field label="API token" help="Pocket Habits → Settings → API tokens"><input value={f.habits_token} onChange={e => setF({ ...f, habits_token: e.target.value })} autoComplete="off" /></Field>
+            </div>} />
+          {f.habits_mode !== 'off' && <div className="two-col tight">
             <Field label="Habit">{habits.length > 0 ? <Select value={String(f.habit_id || '')} onChange={v => setF({ ...f, habit_id: Number(v) })} options={habits.filter(h => !h.end_date).map(h => ({ value: String(h.id), label: h.name }))} placeholder="Pick a habit" /> : <input type="number" value={f.habit_id || ''} onChange={e => setF({ ...f, habit_id: Number(e.target.value) })} placeholder="habit id" />}</Field>
-          </div>
-          <div className="row"><button className="btn sm" onClick={() => run('habits', f.habits_url, f.habits_token)} disabled={!f.habits_url}>Test connection</button>{status('habits')}</div>
+          </div>}
         </div>
       </Card>
       <Card title="🔔 Notifications" actions={badge(f.notify_configured)}>
@@ -166,6 +182,42 @@ function Integrations() {
     </div>
   )
 }
+
+/**
+ * One Pocket app connection: Pocket Core, Direct (URL + token) or Off, with
+ * what it actually is right now. The mode saves at once; Disconnect removes
+ * the saved URL and token.
+ */
+function Connection({ app, mode, via, detail, core, onMode, onDisconnect, hasToken, test, direct }: {
+  app: string; mode: ConnMode; via: string; detail: string; core: boolean; onMode: (m: ConnMode) => void; onDisconnect: () => void
+  hasToken: boolean; test: React.ReactNode; direct: React.ReactNode
+}) {
+  const ok = via !== ''
+  const line = mode === 'off' ? `Off: Kitchen does not talk to ${app}.`
+    : mode === 'core' ? (ok ? `Connected through Pocket Core, as you${detail ? ` (${detail})` : ''}. Nothing to fill in; switch it off for yourself in Pocket Core → Settings → Apps acting for me.` : `Not connected: ${detail}.`)
+    : (ok ? `Direct connection with your own ${app} URL and token; use Test connection to check it.` : `Not connected: ${detail || 'add the URL and a token'}.`)
+  return (
+    <div className="conn-block">
+      <div className="conn-mode">
+        <Segmented size="sm" value={mode} onChange={m => onMode(m as ConnMode)} options={[
+          { value: 'core', label: 'Pocket Core', title: core ? 'Through Pocket Core: per person, nothing to paste' : 'There is no Pocket Core on this box' },
+          { value: 'direct', label: 'Direct', title: 'Your own URL and API token' },
+          { value: 'off', label: 'Off' },
+        ]} />
+      </div>
+      <div className={`conn-status ${mode === 'off' ? '' : ok ? 'ok' : 'bad'}`}><span className="dot" />{line}</div>
+      {mode === 'direct' && <>
+        {direct}
+        <div className="row wrap">{test}{hasToken && <button className="btn sm ghost danger-text" onClick={onDisconnect} title="Remove the saved URL and token">Disconnect</button>}</div>
+      </>}
+      {mode === 'core' && <div className="row wrap">{test}</div>}
+    </div>
+  )
+}
+
+const connBadge = (mode: ConnMode, via: string) => mode === 'off' ? <span className="badge">off</span>
+  : via ? <span className="badge cat">{via === 'core' ? 'Pocket Core' : 'direct'}</span>
+  : <span className="badge warn">not connected</span>
 
 function Users() {
   const { user, users, reloadMeta, status } = useApp()
