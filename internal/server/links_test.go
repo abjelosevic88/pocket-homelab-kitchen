@@ -34,7 +34,7 @@ func TestCoreLinkCooklogRead(t *testing.T) {
 			io.WriteString(w, `{"active":false}`)
 			return
 		}
-		fmt.Fprintf(w, `{"active":true,"kind":"delegated","scope":%q,"audience":"kitchen","user":{"id":2,"email":"bob@example.com","name":"Bob","role":"member"},"app":{"id":5,"slug":"day","name":"Pocket Day"}}`, scope)
+		fmt.Fprintf(w, `{"active":true,"kind":"delegated","scope":%q,"audience":"kitchen","user":{"id":2,"sub":"bob@example.com","email":"bob@example.com","name":"Bob","role":"member"},"app":{"id":5,"slug":"day","name":"Pocket Day"}}`, scope)
 	}))
 	t.Cleanup(coreSrv.Close)
 

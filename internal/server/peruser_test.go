@@ -75,7 +75,7 @@ func newFakeCore(t *testing.T, tokens map[string]string) *httptest.Server {
 			}
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			if email, ok := tokens[in.Token]; ok {
-				fmt.Fprintf(w, `{"active":true,"kind":"device","user":{"id":9,"email":%q,"name":"x","role":"member"}}`, email)
+				fmt.Fprintf(w, `{"active":true,"kind":"device","user":{"id":9,"sub":%q,"email":%q,"name":"x","role":"member"}}`, email, email)
 				return
 			}
 			io.WriteString(w, `{"active":false}`)
@@ -159,6 +159,9 @@ func TestPerUserIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := New(cfg, st, log, nil)
+	if err := s.core.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Bootstrap(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -419,6 +422,9 @@ func TestImportGoesToCaller(t *testing.T) {
 	_ = st.CreateUser(ctx, a)
 	_ = st.CreateUser(ctx, b)
 	s := New(cfg, st, log, nil)
+	if err := s.core.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Bootstrap(ctx); err != nil {
 		t.Fatal(err)
 	}
