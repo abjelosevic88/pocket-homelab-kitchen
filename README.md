@@ -81,10 +81,10 @@ Want to look around first? `DEMO_DATA=true AUTH_MODE=none` seeds eight recipes, 
 All optional, all under **Settings → Integrations**, and per person. Each of Pocket Inventory, Split and Habits has a switch:
 
 - **Pocket Core** — Kitchen acts as you in your own copy of the app through a Pocket Core [app link](https://github.com/abjelosevic88/pocket-homelab-core/blob/main/docs/links.md): for every action it asks Core for a five-minute token with only the scopes that action needs, and never keeps it, so switching the link off (Core → Links for the box, or Core → Settings → Apps acting for me for yourself) stops the next action. Nothing to paste. The default when Kitchen is connected to Core and you saved no token.
-- **Direct** — a URL and an API token you paste (how it always worked; the default when a token is saved, so existing tokens keep working until you switch). **Disconnect** removes them.
+- **Direct** — a URL and an API token you paste (how it always worked; the default when a token is saved, so existing tokens keep working until you switch). **Disconnect** removes them. When Kitchen is connected to Pocket Core this is an advanced option: the switch shows Pocket Core | Off and Direct appears behind “Advanced: connect directly with a URL and key” (or right away if you are on Direct).
 - **Off** — Kitchen does not talk to the app at all.
 
-The status line under the switch says whether the connection works and why not; Test connection follows the chosen mode. The environment variables (see [docs/configuration.md](docs/configuration.md)) seed the first admin's (the owner's) direct connections, each value once, so one cleared in Settings stays cleared.
+The status line under the switch says whether the connection works and why not; Test connection follows the chosen mode. Kitchen reports everybody's mode in effect (core / direct / off) to Pocket Core, so its Links page shows Direct connections too: after registering (on start and every 30 minutes) and right after someone changes a mode or disconnects. The environment variables (see [docs/configuration.md](docs/configuration.md)) seed the first admin's (the owner's) direct connections, each value once, so one cleared in Settings stays cleared.
 
 - **Pocket Inventory** — pick the tag that marks pantry items and a default location for groceries the kitchen creates. Link scopes: `items:read`, `items:write`, `items:adjust`.
 - **Pocket Split** — pick the household group, who usually pays and the category. Link scopes: `groups:read`, `expenses:write`.

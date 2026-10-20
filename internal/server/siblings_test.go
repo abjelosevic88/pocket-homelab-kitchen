@@ -22,10 +22,12 @@ import (
 type linkCore struct {
 	*httptest.Server
 	mu     sync.Mutex
-	urls   map[string]string // app slug → URL
-	allow  map[string]bool   // emails Core knows
-	off    map[string]bool   // "app scope" switched off
-	issued []string          // "app scopes user"
+	urls   map[string]string   // app slug → URL
+	allow  map[string]bool     // emails Core knows
+	off    map[string]bool     // "app scope" switched off
+	issued []string            // "app scopes user"
+	modes  []map[string]string // the last PUT /api/v1/links/modes
+	nModes int                 // how many reports came in
 }
 
 func newLinkCore(t *testing.T) *linkCore {
@@ -36,7 +38,17 @@ func newLinkCore(t *testing.T) *linkCore {
 		defer c.mu.Unlock()
 		switch r.URL.Path {
 		case "/api/v1/apps/register":
-			io.WriteString(w, `{"app":{}}`)
+			io.WriteString(w, `{"app":{},"token":"pca_test"}`)
+		case "/api/v1/links/modes":
+			var in struct {
+				Modes []map[string]string `json:"modes"`
+			}
+			if r.Method != http.MethodPut || r.Header.Get("Authorization") != "Bearer pca_test" || json.NewDecoder(r.Body).Decode(&in) != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			c.modes, c.nModes = in.Modes, c.nModes+1
+			fmt.Fprintf(w, `{"recorded":%d}`, len(in.Modes))
 		case "/api/v1/links/status":
 			app, user := r.URL.Query().Get("app"), r.URL.Query().Get("user")
 			out := []map[string]any{}
@@ -171,6 +183,7 @@ func newLinkKitchen(t *testing.T, env func(*config.Config, *linkKitchen)) *linkK
 	cfg := testConfig(dir)
 	cfg.FoodFactsEnabled = false
 	cfg.CoreURL = lk.core.URL
+	cfg.CoreRegistrationKey = "pcr_test"
 	if env != nil {
 		env(cfg, lk)
 	}

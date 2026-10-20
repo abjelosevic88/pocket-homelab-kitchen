@@ -54,6 +54,7 @@ type Server struct {
 	coreOK   bool
 	coreErr  string
 	resolved map[string]resolvedURL
+	modesMu  sync.Mutex // one connection-mode report at a time
 }
 
 type resolvedURL struct {
@@ -494,7 +495,8 @@ func validDate(s string) bool {
 // ---- Pocket Core ----
 
 // coreLoop registers with Core on start (retrying until it answers) and
-// re-registers every 30 minutes so version and last-seen stay fresh.
+// re-registers every 30 minutes so version and last-seen stay fresh; each
+// time it also reports how everybody connects (modes.go).
 func (s *Server) coreLoop(ctx context.Context) {
 	wait := 5 * time.Second
 	for {
@@ -509,6 +511,7 @@ func (s *Server) coreLoop(ctx context.Context) {
 			s.log.Warn("pocket core: registration failed, retrying", "err", err, "in", wait.String())
 		} else {
 			wait = 30 * time.Minute
+			s.reportModes(ctx) // on start and with every re-registration (30 min)
 		}
 		select {
 		case <-ctx.Done():

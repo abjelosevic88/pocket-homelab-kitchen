@@ -193,6 +193,12 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	for _, k := range modeKeys {
+		if keys[k] {
+			s.reportModesSoon()
+			break
+		}
+	}
 	writeJSON(w, http.StatusOK, s.publicSettings(r.Context(), me, cur))
 }
 

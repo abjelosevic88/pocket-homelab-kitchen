@@ -17,6 +17,8 @@ Every other route answers `403` to a link token, and it only ever sees the perso
 
 Kitchen itself acts in Pocket Inventory (`items:read`, `items:write`, `items:adjust`), Pocket Split (`groups:read`, `expenses:write`) and Pocket Habits (`habits:read`, `entries:write`) when the person chose **Pocket Core** for that app, asking Core for a fresh token with just the scopes each action needs.
 
+Kitchen reports how each person connects to Inventory, Split and Habits (the `*_mode` in effect, defaults included) to Core with `PUT /api/v1/links/modes`, one call for everybody, after each registration (start, every 30 minutes) and right after a `PUT /settings` that touches a `*_mode` or `*_token`. Report only; failures are logged.
+
 ## Auth & account
 | Method | Path | Notes |
 |---|---|---|
