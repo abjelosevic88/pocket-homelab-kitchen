@@ -3,6 +3,8 @@ import { api, V1 } from './api'
 import { setDateFormats, type DateFormat, type TimeFormat } from './format'
 import type { Currency, Meta, Settings, User } from './types'
 
+export type ThemeMode = 'system' | 'light' | 'dark'
+
 interface AuthStatus { needs_setup: boolean; auth_mode: string; authenticated: boolean; user: User | null; version: string; title: string; oidc?: boolean; oidc_name?: string }
 interface AppState {
   status: AuthStatus | null
@@ -11,7 +13,9 @@ interface AppState {
   users: User[]
   currencies: Currency[]
   meta: Meta
+  themeMode: ThemeMode
   theme: 'light' | 'dark'
+  setThemeMode: (m: ThemeMode) => void
   toggleTheme: () => void
   refresh: () => Promise<void>
   reloadMeta: () => Promise<void>
@@ -30,8 +34,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [users, setUsers] = useState<User[]>([])
   const [currencies, setCurrencies] = useState<Currency[]>([])
   const [meta, setMeta] = useState<Meta>(EMPTY_META)
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => (localStorage.getItem('pk-theme') as 'light' | 'dark') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'))
-  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('pk-theme', theme) }, [theme])
+  // the theme follows the system unless set to light or dark (an older saved choice is kept)
+  const [themeMode, setThemeModeRaw] = useState<ThemeMode>(() => (localStorage.getItem('pk-theme') as ThemeMode) || 'system')
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const h = () => setSystemDark(mq.matches)
+    mq.addEventListener('change', h)
+    return () => mq.removeEventListener('change', h)
+  }, [])
+  const theme: 'light' | 'dark' = themeMode === 'system' ? (systemDark ? 'dark' : 'light') : themeMode
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', theme === 'dark' ? '#111113' : '#ffffff'))
+  }, [theme])
+  const setThemeMode = useCallback((m: ThemeMode) => { setThemeModeRaw(m); if (m === 'system') localStorage.removeItem('pk-theme'); else localStorage.setItem('pk-theme', m) }, [])
   useEffect(() => { if (settings?.title) document.title = settings.title }, [settings?.title])
   const setSettings = useCallback((s: Settings) => { setSettingsRaw(s); setDateFormats(s.date_format as DateFormat, s.time_format as TimeFormat) }, [])
   const reloadMeta = useCallback(async () => {
@@ -53,5 +70,5 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener('pk:unauthorized', h)
     return () => window.removeEventListener('pk:unauthorized', h)
   }, [])
-  return <Ctx.Provider value={{ status, user, settings, users, currencies, meta, theme, toggleTheme: () => setTheme(t => t === 'dark' ? 'light' : 'dark'), refresh, reloadMeta, setUser, setSettings }}>{children}</Ctx.Provider>
+  return <Ctx.Provider value={{ status, user, settings, users, currencies, meta, themeMode, theme, setThemeMode, toggleTheme: () => setThemeMode(theme === 'dark' ? 'light' : 'dark'), refresh, reloadMeta, setUser, setSettings }}>{children}</Ctx.Provider>
 }

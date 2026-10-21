@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { api, V1 } from '../lib/api'
 import { useApp } from '../lib/app-context'
 import { decimalsOf, fmtDate, todayISO } from '../lib/format'
-import { cap, fmtQty, SLOT_ICON, type CheckoutResult, type CookResult, type List, type ListItem, type LookupResult, type PantryItem, type PlanEntry, type Recipe, type SplitGroup } from '../lib/types'
+import { cap, fmtQty, type CheckoutResult, type CookResult, type List, type ListItem, type LookupResult, type PantryItem, type PlanEntry, type Recipe, type SplitGroup } from '../lib/types'
 import { Field, Modal, Segmented, useToast } from './ui'
 import { Select } from './Select'
 import { AmountInput } from './Money'
 import { Scanner } from './Scanner'
+import { Icon, SLOT_ICON } from './icons'
 
 export function DataList({ id, items }: { id: string; items: string[] }) { return <datalist id={id}>{items.map(i => <option key={i} value={i} />)}</datalist> }
 
@@ -39,7 +40,7 @@ export function PlanModal({ entry, date, slot, recipe, extra, onClose, onSaved }
       <form onSubmit={submit} className="grid" style={{ gap: 14 }}>
         <div className="two-col tight">
           <Field label="Date"><input type="date" value={f.date} onChange={e => set('date', e.target.value)} required /></Field>
-          <Field group label="Meal"><Segmented value={f.slot} onChange={v => set('slot', v)} options={meta.slots.map(s => ({ value: s, label: `${SLOT_ICON[s] || ''} ${cap(s)}` }))} size="sm" /></Field>
+          <Field group label="Meal"><Segmented value={f.slot} onChange={v => set('slot', v)} options={meta.slots.map(s => ({ value: s, label: <span className="row" style={{ gap: 5 }}><Icon name={SLOT_ICON[s] || 'utensils'} size={13} />{cap(s)}</span> }))} size="sm" /></Field>
         </div>
         <Field group label="What"><Segmented value={free ? 'free' : 'recipe'} onChange={v => setFree(v === 'free')} options={[{ value: 'recipe', label: 'A recipe' }, { value: 'free', label: 'Free text' }]} size="sm" /></Field>
         {free
@@ -79,8 +80,8 @@ export function CookModal({ recipe, entry, onClose, onDone }: { recipe?: Recipe;
           {res.deducted?.length > 0 && <div><b>Taken from the pantry</b><div className="result-list mt-sm">{res.deducted.map(d => <div key={d} className="ok">{d}</div>)}</div></div>}
           {res.not_in_pantry?.length > 0 && <div><b>Not tracked in the pantry</b><div className="result-list mt-sm">{res.not_in_pantry.map(d => <div key={d} className="miss">{d}</div>)}</div></div>}
           {res.warnings?.length > 0 && <div className="result-list">{res.warnings.map(d => <div key={d} className="warn">{d}</div>)}</div>}
-          <p className="muted small">{res.habit_marked ? '✓ “Cooked at home” marked in Pocket Habits.' : settings?.habits_configured ? 'Habit not marked.' : 'Connect Pocket Habits under Settings → Integrations to mark a habit automatically.'}</p>
-          <div className="form-actions"><button className="btn primary" onClick={() => onDone(res)}>Done</button></div>
+          <p className="muted small">{res.habit_marked ? '✓ “Cooked at home” marked in Pocket Habits.' : settings?.habits_configured ? 'Habit not marked.' : 'Connect Pocket Habits under Settings → Connected apps to mark a habit automatically.'}</p>
+          <div className="form-actions"><button type="button" className="btn primary" onClick={() => onDone(res)}>Done</button></div>
         </div>
       </Modal>
     )
@@ -92,11 +93,11 @@ export function CookModal({ recipe, entry, onClose, onDone }: { recipe?: Recipe;
           <Field label="Date"><input type="date" value={f.date} max={todayISO()} onChange={e => setF({ ...f, date: e.target.value })} required /></Field>
           <Field label="Servings made" help={base ? `recipe makes ${base}` : undefined}><input type="number" min={1} value={f.servings || ''} onChange={e => setF({ ...f, servings: Number(e.target.value) })} /></Field>
         </div>
-        {recipe && <Field group label="How was it?"><div className="rating-pick">{[1, 2, 3, 4, 5].map(n => <button type="button" key={n} className={n <= f.rating ? 'on' : ''} onClick={() => setF({ ...f, rating: f.rating === n ? 0 : n })}>★</button>)}</div></Field>}
+        {recipe && <Field group label="How was it?"><RatingPick value={f.rating} onChange={v => setF({ ...f, rating: v })} /></Field>}
         <Field label="Notes"><input value={f.notes} onChange={e => setF({ ...f, notes: e.target.value })} placeholder="Less salt next time" /></Field>
-        <label className="row"><input type="checkbox" checked={f.deduct_pantry} onChange={e => setF({ ...f, deduct_pantry: e.target.checked })} style={{ width: 'auto' }} /> Take the ingredients off the pantry{settings?.inventory_configured ? ' (Pocket Inventory)' : ''}</label>
-        {settings?.habits_configured && <label className="row"><input type="checkbox" checked={f.mark_habit} onChange={e => setF({ ...f, mark_habit: e.target.checked })} style={{ width: 'auto' }} /> Mark “cooked at home” in Pocket Habits</label>}
-        <div className="form-actions"><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy}>{busy ? 'Saving…' : 'I cooked it'}</button></div>
+        <label className="check-row"><input type="checkbox" checked={f.deduct_pantry} onChange={e => setF({ ...f, deduct_pantry: e.target.checked })} /> Take the ingredients off the pantry{settings?.inventory_configured ? ' (Pocket Inventory)' : ''}</label>
+        {settings?.habits_configured && <label className="check-row"><input type="checkbox" checked={f.mark_habit} onChange={e => setF({ ...f, mark_habit: e.target.checked })} /> Mark “cooked at home” in Pocket Habits</label>}
+        <div className="form-actions"><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy}>{busy ? 'Saving…' : <><Icon name="flame" size={15} />I cooked it</>}</button></div>
       </form>
     </Modal>
   )
@@ -125,7 +126,7 @@ export function AddToListModal({ recipe, onClose, onDone }: { recipe: Recipe; on
           <Field label="List"><Select value={String(f.list_id)} onChange={v => setF({ ...f, list_id: Number(v) })} options={lists.map(l => ({ value: String(l.id), label: l.name, hint: `${l.open} open` }))} /></Field>
           <Field label="For … servings"><input type="number" min={1} value={f.servings} onChange={e => setF({ ...f, servings: Number(e.target.value) })} /></Field>
         </div>
-        <label className="row"><input type="checkbox" checked={f.skip_pantry} onChange={e => setF({ ...f, skip_pantry: e.target.checked })} style={{ width: 'auto' }} /> Skip what the pantry already has</label>
+        <label className="check-row"><input type="checkbox" checked={f.skip_pantry} onChange={e => setF({ ...f, skip_pantry: e.target.checked })} /> Skip what the pantry already has</label>
         <div className="form-actions"><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !f.list_id}>Add to list</button></div>
       </form>
     </Modal>
@@ -151,7 +152,7 @@ export function ShopFromPlanModal({ from, to, onClose, onDone }: { from: string;
           <Field label="To"><input type="date" value={f.to} onChange={e => setF({ ...f, to: e.target.value })} /></Field>
         </div>
         <Field label="List"><Select value={String(f.list_id)} onChange={v => setF({ ...f, list_id: Number(v) })} options={lists.map(l => ({ value: String(l.id), label: l.name, hint: `${l.open} open` }))} /></Field>
-        <label className="row"><input type="checkbox" checked={f.skip_pantry} onChange={e => setF({ ...f, skip_pantry: e.target.checked })} style={{ width: 'auto' }} /> Skip what the pantry already has (short amounts are reduced)</label>
+        <label className="check-row"><input type="checkbox" checked={f.skip_pantry} onChange={e => setF({ ...f, skip_pantry: e.target.checked })} /> Skip what the pantry already has (short amounts are reduced)</label>
         <div className="form-actions"><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !f.list_id}>Build the list</button></div>
       </form>
     </Modal>
@@ -221,7 +222,7 @@ export function CheckoutModal({ list, items, onClose, onDone }: { list: List; it
           {res.restocked.length > 0 && <div><b>Pantry</b><div className="result-list mt-sm">{res.restocked.map(d => <div key={d} className="ok">{d}</div>)}</div></div>}
           {res.purchase.split_expense_id > 0 && <p className="ok">✓ Posted to Pocket Split{res.purchase.paid_by ? ` (paid by ${res.purchase.paid_by})` : ''}.{res.split_url && <> <a href={res.split_url} target="_blank" rel="noreferrer">Open</a></>}</p>}
           {res.warnings.length > 0 && <div className="result-list">{res.warnings.map(d => <div key={d} className="warn">{d}</div>)}</div>}
-          <div className="form-actions"><button className="btn primary" onClick={() => onDone(res)}>Done</button></div>
+          <div className="form-actions"><button type="button" className="btn primary" onClick={() => onDone(res)}>Done</button></div>
         </div>
       </Modal>
     )
@@ -238,15 +239,15 @@ export function CheckoutModal({ list, items, onClose, onDone }: { list: List; it
           <Field label="Store"><input value={f.store} onChange={e => setF({ ...f, store: e.target.value })} placeholder="Bingo" /></Field>
           <Field label="Notes"><input value={f.notes} onChange={e => setF({ ...f, notes: e.target.value })} /></Field>
         </div>
-        <label className="row"><input type="checkbox" checked={f.restock} onChange={e => setF({ ...f, restock: e.target.checked })} style={{ width: 'auto' }} /> Put the items into the pantry{settings?.inventory_configured ? ' (Pocket Inventory)' : ''}</label>
-        <label className="row"><input type="checkbox" checked={f.remove} onChange={e => setF({ ...f, remove: e.target.checked })} style={{ width: 'auto' }} /> Remove the checked lines from the list</label>
+        <label className="check-row"><input type="checkbox" checked={f.restock} onChange={e => setF({ ...f, restock: e.target.checked })} /> Put the items into the pantry{settings?.inventory_configured ? ' (Pocket Inventory)' : ''}</label>
+        <label className="check-row"><input type="checkbox" checked={f.remove} onChange={e => setF({ ...f, remove: e.target.checked })} /> Remove the checked lines from the list</label>
         {settings?.split_configured ? <>
-          <label className="row"><input type="checkbox" checked={f.split} onChange={e => setF({ ...f, split: e.target.checked })} style={{ width: 'auto' }} /> Post the receipt to Pocket Split{group ? ` (${group.name})` : ''}</label>
+          <label className="check-row"><input type="checkbox" checked={f.split} onChange={e => setF({ ...f, split: e.target.checked })} /> Post the receipt to Pocket Split{group ? ` (${group.name})` : ''}</label>
           {f.split && <div className="two-col tight">
             <Field label="Paid by">{group ? <Select value={String(f.paid_by)} onChange={v => setF({ ...f, paid_by: Number(v) })} options={group.members.map(m => ({ value: String(m.id), label: m.name }))} placeholder="Who paid?" /> : <input value={f.paid_by || ''} onChange={e => setF({ ...f, paid_by: Number(e.target.value) })} placeholder="member id" />}</Field>
             <Field label="Category">{cats.length > 0 ? <Select value={f.category} onChange={v => setF({ ...f, category: v })} options={cats.map(c => ({ value: c, label: c }))} /> : <input value={f.category} onChange={e => setF({ ...f, category: e.target.value })} />}</Field>
           </div>}
-        </> : <p className="muted small">Connect Pocket Split under Settings → Integrations to post the receipt as a shared expense.</p>}
+        </> : <p className="muted small">Connect Pocket Split under Settings → Connected apps to post the receipt as a shared expense.</p>}
         <div className="form-actions"><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || (checked.length === 0 && !f.amount)}>{busy ? 'Saving…' : 'Finish'}</button></div>
       </form>
     </Modal>
@@ -287,7 +288,7 @@ export function PantryModal({ item, prefill, onClose, onSaved, onDeleted }: { it
           <Field label="Best before"><input type="date" value={f.expiry_date} onChange={e => set('expiry_date', e.target.value)} /></Field>
         </div>
         <Field label="Notes"><input value={f.notes} onChange={e => set('notes', e.target.value)} /></Field>
-        {!item && settings?.inventory_configured && <label className="row"><input type="checkbox" checked={!f.local} onChange={e => set('local', !e.target.checked)} style={{ width: 'auto' }} /> Create it in Pocket Inventory too (tag “{settings.inventory_tag}”)</label>}
+        {!item && settings?.inventory_configured && <label className="check-row"><input type="checkbox" checked={!f.local} onChange={e => set('local', !e.target.checked)} /> Create it in Pocket Inventory too (tag “{settings.inventory_tag}”)</label>}
         {item?.inventory_id && <p className="muted small">Mirrors Pocket Inventory item #{item.inventory_id}; changes are pushed there.</p>}
         <div className="form-actions">
           {item && onDeleted && <button type="button" className="btn ghost danger-text" onClick={async () => { await api.del(`${V1}/pantry/${item.id}`); onDeleted() }}>Remove</button>}
@@ -316,21 +317,21 @@ export function ScanModal({ onClose, onAdded }: { onClose: () => void; onAdded: 
       {!res ? (busy ? <p className="muted">Looking up…</p> : <Scanner onCode={lookup} />) : (
         <div className="grid" style={{ gap: 12 }}>
           {res.source === 'pantry' && res.pantry && <>
-            <div className="product-card">{res.pantry.photo_url ? <img src={res.pantry.photo_url} alt="" /> : <div className="ph">🧺</div>}<div><b>{res.pantry.name}</b><div className="muted small">Already in the pantry · {fmtQty(res.pantry.quantity, res.pantry.unit)}{res.pantry.location ? ` · ${res.pantry.location}` : ''}</div></div></div>
-            <div className="form-actions"><button className="btn" onClick={() => setRes(null)}>Scan another</button><button className="btn primary" onClick={() => plusOne(res.pantry!)}>+1 {res.pantry.unit || ''}</button></div>
+            <div className="product-card">{res.pantry.photo_url ? <img src={res.pantry.photo_url} alt="" /> : <div className="ph"><Icon name="basket" size={28} /></div>}<div><b>{res.pantry.name}</b><div className="muted small">Already in the pantry · {fmtQty(res.pantry.quantity, res.pantry.unit)}{res.pantry.location ? ` · ${res.pantry.location}` : ''}</div></div></div>
+            <div className="form-actions"><button type="button" className="btn" onClick={() => setRes(null)}>Scan another</button><button type="button" className="btn primary" onClick={() => plusOne(res.pantry!)}>+1 {res.pantry.unit || ''}</button></div>
           </>}
           {res.source === 'inventory' && res.inventory && <>
-            <div className="product-card"><div className="ph">📦</div><div><b>{res.inventory.name}</b><div className="muted small">In Pocket Inventory (not tagged as pantry) · {fmtQty(res.inventory.quantity, res.inventory.unit)}{res.inventory.location_name ? ` · ${res.inventory.location_name}` : ''}</div></div></div>
+            <div className="product-card"><div className="ph"><Icon name="package" size={28} /></div><div><b>{res.inventory.name}</b><div className="muted small">In Pocket Inventory (not tagged as pantry) · {fmtQty(res.inventory.quantity, res.inventory.unit)}{res.inventory.location_name ? ` · ${res.inventory.location_name}` : ''}</div></div></div>
             <p className="muted small">Add the pantry tag to that item in Pocket Inventory and sync, or create a separate pantry entry here.</p>
-            <div className="form-actions"><button className="btn" onClick={() => setRes(null)}>Scan another</button><button className="btn primary" onClick={() => setAdd({ name: res.inventory!.name, barcode: res.barcode, brand: res.inventory!.brand, unit: res.inventory!.unit, quantity: 1 })}>Add to pantry</button></div>
+            <div className="form-actions"><button type="button" className="btn" onClick={() => setRes(null)}>Scan another</button><button type="button" className="btn primary" onClick={() => setAdd({ name: res.inventory!.name, barcode: res.barcode, brand: res.inventory!.brand, unit: res.inventory!.unit, quantity: 1 })}>Add to pantry</button></div>
           </>}
           {res.source === 'openfoodfacts' && res.product && <>
-            <div className="product-card">{res.product.image_url ? <img src={res.product.image_url} alt="" /> : <div className="ph">🛒</div>}<div><b>{res.product.name}</b><div className="muted small">{[res.product.brand, res.product.quantity].filter(Boolean).join(' · ')}</div><div className="muted small">{res.product.categories.slice(-3).join(', ')}</div><div className="muted small">Open Food Facts</div></div></div>
-            <div className="form-actions"><button className="btn" onClick={() => setRes(null)}>Scan another</button><button className="btn primary" onClick={() => setAdd({ name: res.product!.name, brand: res.product!.brand, barcode: res.barcode, category: res.product!.categories.slice(-1)[0] || '', photo_url: res.product!.image_url, quantity: 1, unit: 'pcs', notes: res.product!.quantity })}>Add to pantry</button></div>
+            <div className="product-card">{res.product.image_url ? <img src={res.product.image_url} alt="" /> : <div className="ph"><Icon name="cart" size={28} /></div>}<div><b>{res.product.name}</b><div className="muted small">{[res.product.brand, res.product.quantity].filter(Boolean).join(' · ')}</div><div className="muted small">{res.product.categories.slice(-3).join(', ')}</div><div className="muted small">Open Food Facts</div></div></div>
+            <div className="form-actions"><button type="button" className="btn" onClick={() => setRes(null)}>Scan another</button><button type="button" className="btn primary" onClick={() => setAdd({ name: res.product!.name, brand: res.product!.brand, barcode: res.barcode, category: res.product!.categories.slice(-1)[0] || '', photo_url: res.product!.image_url, quantity: 1, unit: 'pcs', notes: res.product!.quantity })}>Add to pantry</button></div>
           </>}
           {res.source === 'none' && <>
-            <div className="callout">Nothing known for <code>{res.barcode}</code>{res.error ? ` (${res.error})` : ''}. Add it by hand — the barcode is remembered for next time.</div>
-            <div className="form-actions"><button className="btn" onClick={() => setRes(null)}>Scan another</button><button className="btn primary" onClick={() => setAdd({ barcode: res.barcode, quantity: 1, unit: 'pcs' })}>Add by hand</button></div>
+            <div className="callout"><Icon name="info" size={15} /><span>Nothing known for <code>{res.barcode}</code>{res.error ? ` (${res.error})` : ''}. Add it by hand — the barcode is remembered for next time.</span></div>
+            <div className="form-actions"><button type="button" className="btn" onClick={() => setRes(null)}>Scan another</button><button type="button" className="btn primary" onClick={() => setAdd({ barcode: res.barcode, quantity: 1, unit: 'pcs' })}>Add by hand</button></div>
           </>}
         </div>
       )}
@@ -355,6 +356,31 @@ export function ImportRecipeModal({ onClose }: { onClose: () => void }) {
         <p className="muted small">Most recipe sites publish their recipe as structured data; the title, times, servings, ingredients, steps and photo come across and you can fix anything before saving.</p>
         <Field label="URL"><input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://www.bbcgoodfood.com/recipes/…" required autoFocus /></Field>
         <div className="form-actions"><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy}>{busy ? 'Fetching…' : 'Fetch'}</button></div>
+      </form>
+    </Modal>
+  )
+}
+
+/** One to five stars; a second click on the current star clears it. */
+export function RatingPick({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  return <div className="rating-pick" role="radiogroup" aria-label="Rating">{[1, 2, 3, 4, 5].map(n => <button type="button" key={n} role="radio" aria-checked={n === value} aria-label={`${n} star${n === 1 ? '' : 's'}`} className={n <= value ? 'on' : ''} onClick={() => onChange(value === n ? 0 : n)}><Icon name="star" size={20} /></button>)}</div>
+}
+
+// ---------- shopping list ----------
+
+export function ListModal({ list, onClose, onSaved }: { list?: List; onClose: () => void; onSaved: (l: List) => void }) {
+  const { toast } = useToast()
+  const [f, setF] = useState({ name: list?.name || '', store: list?.store || '' })
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    try { const l = list ? await api.put<List>(`${V1}/lists/${list.id}`, f) : await api.post<List>(`${V1}/lists`, f); onSaved(l) } catch (e) { toast((e as Error).message, 'err') }
+  }
+  return (
+    <Modal title={list ? 'Edit list' : 'New list'} onClose={onClose} size="sm">
+      <form onSubmit={submit} className="grid" style={{ gap: 14 }}>
+        <Field label="Name"><input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} required autoFocus placeholder="Groceries, Market, Costco…" /></Field>
+        <Field label="Store (optional)"><input value={f.store} onChange={e => setF({ ...f, store: e.target.value })} /></Field>
+        <div className="form-actions"><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn primary">{list ? 'Save' : 'Create'}</button></div>
       </form>
     </Modal>
   )

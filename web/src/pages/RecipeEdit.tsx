@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, upload, V1 } from '../lib/api'
 import { useApp } from '../lib/app-context'
-import { cap, COURSE_ICON, recipeImage, type Ingredient, type Recipe } from '../lib/types'
+import { cap, recipeImage, type Ingredient, type Recipe } from '../lib/types'
 import { Card, Field, Loading, PageHeader, useToast } from '../components/ui'
-import { DataList } from '../components/forms'
+import { DataList, RatingPick } from '../components/forms'
+import { COURSE_ICON, Icon } from '../components/icons'
+import { announceChange, useCrumb } from '../components/Layout'
 
 type Form = { title: string; description: string; servings: number; prep_minutes: number; cook_minutes: number; course: string; cuisine: string; tags: string; source_url: string; source_name: string; rating: number; notes: string; image_url: string; ingredients: Ingredient[]; steps: string[]; nutrition: Record<string, string> }
 
@@ -30,6 +32,7 @@ export default function RecipeEdit() {
     }
     setF(blank(settings?.default_servings || 2))
   }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useCrumb(existing ? `Edit ${existing.title}` : sp.get('import') ? 'Imported recipe' : 'New recipe')
   if (!f) return <Loading />
   const set = (k: keyof Form, v: unknown) => setF(x => x ? { ...x, [k]: v } : x)
   const setIng = (i: number, patch: Partial<Ingredient>) => set('ingredients', f.ingredients.map((x, j) => j === i ? { ...x, ...patch } : x))
@@ -43,6 +46,7 @@ export default function RecipeEdit() {
       if (photo) await upload(`${V1}/recipes/${r.id}/photo`, 'file', photo)
       sessionStorage.removeItem('pk-import')
       toast(existing ? 'Saved' : 'Recipe added')
+      announceChange()
       navigate(`/recipes/${r.id}`)
     } catch (e) { toast((e as Error).message, 'err') } finally { setBusy(false) }
   }
@@ -57,8 +61,8 @@ export default function RecipeEdit() {
   const img = photo ? URL.createObjectURL(photo) : existing ? recipeImage(existing) : f.image_url
   return (
     <form onSubmit={save}>
-      <PageHeader title={existing ? `Edit ${existing.title}` : sp.get('import') ? 'Check the imported recipe' : 'New recipe'} actions={<><button type="button" className="btn" onClick={() => navigate(existing ? `/recipes/${existing.id}` : '/recipes')}>Cancel</button><button className="btn primary" disabled={busy}>{busy ? 'Saving…' : 'Save recipe'}</button></>} />
-      <div className="two-col" style={{ gridTemplateColumns: 'minmax(0, 3fr) minmax(0, 2fr)' }}>
+      <PageHeader title={existing ? `Edit ${existing.title}` : sp.get('import') ? 'Check the imported recipe' : 'New recipe'} actions={<><button type="button" className="btn" onClick={() => navigate(existing ? `/recipes/${existing.id}` : '/recipes')}>Cancel</button><button className="btn primary" disabled={busy}><Icon name="check" size={15} />{busy ? 'Saving…' : 'Save recipe'}</button></>} />
+      <div className="two-col cols-3-2">
         <div className="grid" style={{ gap: 16 }}>
           <Card title="Recipe">
             <div className="grid" style={{ gap: 12 }}>
@@ -69,15 +73,15 @@ export default function RecipeEdit() {
                 <Field label="Prep (min)"><input type="number" min={0} value={f.prep_minutes || ''} onChange={e => set('prep_minutes', Number(e.target.value))} /></Field>
                 <Field label="Cook (min)"><input type="number" min={0} value={f.cook_minutes || ''} onChange={e => set('cook_minutes', Number(e.target.value))} /></Field>
               </div>
-              <Field group label="Course"><div className="chips">{meta.courses.map(c => <button type="button" key={c} className={`chip ${f.course === c ? 'active' : ''}`} onClick={() => set('course', c)}>{COURSE_ICON[c]} {cap(c)}</button>)}</div></Field>
+              <Field group label="Course"><div className="chips">{meta.courses.map(c => <button type="button" key={c} className={`chip ${f.course === c ? 'active' : ''}`} onClick={() => set('course', c)}><Icon name={COURSE_ICON[c] || 'utensils'} size={14} />{cap(c)}</button>)}</div></Field>
               <div className="two-col tight">
                 <Field label="Cuisine"><input value={f.cuisine} onChange={e => set('cuisine', e.target.value)} placeholder="Italian" /></Field>
                 <Field label="Tags" help="Comma separated"><input value={f.tags} onChange={e => set('tags', e.target.value)} placeholder="quick, vegetarian, batch" /></Field>
               </div>
-              <Field group label="Rating"><div className="rating-pick">{[1, 2, 3, 4, 5].map(n => <button type="button" key={n} className={n <= f.rating ? 'on' : ''} onClick={() => set('rating', f.rating === n ? 0 : n)}>★</button>)}</div></Field>
+              <Field group label="Rating"><RatingPick value={f.rating} onChange={v => set('rating', v)} /></Field>
             </div>
           </Card>
-          <Card title="Ingredients" actions={<><button type="button" className="btn sm" onClick={() => setBulk(b => !b)}>Paste a list</button><button type="button" className="btn sm" onClick={() => set('ingredients', [...f.ingredients, { name: '', qty: 0, unit: '', note: '' }])}>+ Line</button></>}>
+          <Card title="Ingredients" actions={<><button type="button" className="btn sm" onClick={() => setBulk(b => !b)}><Icon name="text" size={14} />Paste a list</button><button type="button" className="btn sm" onClick={() => set('ingredients', [...f.ingredients, { name: '', qty: 0, unit: '', note: '' }])}><Icon name="plus" size={14} />Line</button></>}>
             {bulk && <div className="grid mb" style={{ gap: 8 }}><textarea rows={5} value={bulkText} onChange={e => setBulkText(e.target.value)} placeholder={'200 g flour\n2 eggs\n1 tsp salt'} /><div className="row"><button type="button" className="btn sm primary" onClick={applyBulk}>Add these lines</button><button type="button" className="btn sm" onClick={() => setBulk(false)}>Cancel</button></div></div>}
             <div className="grid" style={{ gap: 6 }}>
               {f.ingredients.map((ing, i) => (
@@ -86,21 +90,21 @@ export default function RecipeEdit() {
                   <input value={ing.unit} onChange={e => setIng(i, { unit: e.target.value })} placeholder="unit" list="units" aria-label="Unit" />
                   <input value={ing.name} onChange={e => setIng(i, { name: e.target.value })} placeholder="Ingredient" aria-label="Ingredient" list="pantry-names" />
                   <input className="note-in" value={ing.note} onChange={e => setIng(i, { note: e.target.value })} placeholder="note (chopped, optional…)" aria-label="Note" />
-                  <label className="row small muted opt-in" title="Optional ingredient"><input type="checkbox" checked={!!ing.optional} onChange={e => setIng(i, { optional: e.target.checked })} style={{ width: 'auto' }} />opt.</label>
-                  <span className="row" style={{ gap: 2 }}><button type="button" className="icon-btn" onClick={() => set('ingredients', move(f.ingredients, i, -1))} aria-label="Up">↑</button><button type="button" className="icon-btn" onClick={() => set('ingredients', move(f.ingredients, i, 1))} aria-label="Down">↓</button><button type="button" className="icon-btn" onClick={() => set('ingredients', f.ingredients.filter((_, j) => j !== i))} aria-label="Remove">✕</button></span>
+                  <label className="check-row small muted opt-in" title="Optional ingredient"><input type="checkbox" checked={!!ing.optional} onChange={e => setIng(i, { optional: e.target.checked })} />opt.</label>
+                  <span className="row-tools"><button type="button" className="icon-btn" onClick={() => set('ingredients', move(f.ingredients, i, -1))} aria-label="Up"><Icon name="chevron-up" size={15} /></button><button type="button" className="icon-btn" onClick={() => set('ingredients', move(f.ingredients, i, 1))} aria-label="Down"><Icon name="chevron-down" size={15} /></button><button type="button" className="icon-btn" onClick={() => set('ingredients', f.ingredients.filter((_, j) => j !== i))} aria-label="Remove"><Icon name="x" size={15} /></button></span>
                 </div>
               ))}
             </div>
             <DataList id="units" items={meta.units} />
             <p className="muted small mt">Names that match a pantry item are linked automatically, so cooking takes them off the shelf.</p>
           </Card>
-          <Card title="Steps" actions={<button type="button" className="btn sm" onClick={() => set('steps', [...f.steps, ''])}>+ Step</button>}>
+          <Card title="Steps" actions={<button type="button" className="btn sm" onClick={() => set('steps', [...f.steps, ''])}><Icon name="plus" size={14} />Step</button>}>
             <div className="grid" style={{ gap: 8 }}>
               {f.steps.map((s, i) => (
                 <div key={i} className="step-edit">
                   <span className="n">{i + 1}.</span>
                   <textarea rows={2} value={s} onChange={e => setStep(i, e.target.value)} placeholder="What to do" />
-                  <span className="row" style={{ gap: 2, paddingTop: 6 }}><button type="button" className="icon-btn" onClick={() => set('steps', move(f.steps, i, -1))} aria-label="Up">↑</button><button type="button" className="icon-btn" onClick={() => set('steps', move(f.steps, i, 1))} aria-label="Down">↓</button><button type="button" className="icon-btn" onClick={() => set('steps', f.steps.filter((_, j) => j !== i))} aria-label="Remove">✕</button></span>
+                  <span className="row-tools" style={{ paddingTop: 6 }}><button type="button" className="icon-btn" onClick={() => set('steps', move(f.steps, i, -1))} aria-label="Up"><Icon name="chevron-up" size={15} /></button><button type="button" className="icon-btn" onClick={() => set('steps', move(f.steps, i, 1))} aria-label="Down"><Icon name="chevron-down" size={15} /></button><button type="button" className="icon-btn" onClick={() => set('steps', f.steps.filter((_, j) => j !== i))} aria-label="Remove"><Icon name="x" size={15} /></button></span>
                 </div>
               ))}
             </div>
@@ -111,7 +115,7 @@ export default function RecipeEdit() {
             <div className="photo-drop">
               {img ? <img src={img} alt="" /> : <span className="muted small">No photo</span>}
               <div className="grid" style={{ gap: 6 }}>
-                <label className="btn sm">Choose a photo…<input type="file" accept="image/*" hidden onChange={e => setPhoto(e.target.files?.[0] || null)} /></label>
+                <label className="btn sm"><Icon name="upload" size={14} />Choose a photo…<input type="file" accept="image/*" hidden onChange={e => setPhoto(e.target.files?.[0] || null)} /></label>
                 {existing?.has_photo && <button type="button" className="btn sm ghost danger-text" onClick={async () => { await api.del(`${V1}/recipes/${existing.id}/photo`); setExisting({ ...existing, has_photo: false }); toast('Photo removed') }}>Remove photo</button>}
               </div>
             </div>
@@ -124,9 +128,9 @@ export default function RecipeEdit() {
             </div>
           </Card>
           <Card title="Notes"><textarea rows={4} value={f.notes} onChange={e => set('notes', e.target.value)} placeholder="Tweaks, what worked, what to try" /></Card>
-          <Card title="Nutrition per serving" actions={<button type="button" className="btn sm" onClick={() => set('nutrition', { ...f.nutrition, [`field${Object.keys(f.nutrition).length + 1}`]: '' })}>+ Field</button>}>
+          <Card title="Nutrition per serving" actions={<button type="button" className="btn sm" onClick={() => set('nutrition', { ...f.nutrition, [`field${Object.keys(f.nutrition).length + 1}`]: '' })}><Icon name="plus" size={14} />Field</button>}>
             <div className="grid" style={{ gap: 6 }}>
-              {Object.entries(f.nutrition).map(([k, v]) => <div key={k} className="row"><input value={k} onChange={e => { const n: Record<string, string> = {}; for (const [kk, vv] of Object.entries(f.nutrition)) n[kk === k ? e.target.value : kk] = vv; set('nutrition', n) }} placeholder="calories" /><input value={v} onChange={e => set('nutrition', { ...f.nutrition, [k]: e.target.value })} placeholder="420 kcal" /><button type="button" className="icon-btn" onClick={() => { const n = { ...f.nutrition }; delete n[k]; set('nutrition', n) }}>✕</button></div>)}
+              {Object.entries(f.nutrition).map(([k, v]) => <div key={k} className="row"><input value={k} onChange={e => { const n: Record<string, string> = {}; for (const [kk, vv] of Object.entries(f.nutrition)) n[kk === k ? e.target.value : kk] = vv; set('nutrition', n) }} placeholder="calories" /><input value={v} onChange={e => set('nutrition', { ...f.nutrition, [k]: e.target.value })} placeholder="420 kcal" /><button type="button" className="icon-btn" aria-label="Remove" onClick={() => { const n = { ...f.nutrition }; delete n[k]; set('nutrition', n) }}><Icon name="x" size={15} /></button></div>)}
               {Object.keys(f.nutrition).length === 0 && <p className="muted small">Optional.</p>}
             </div>
           </Card>

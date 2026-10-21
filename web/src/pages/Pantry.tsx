@@ -6,6 +6,8 @@ import { ago, fmtDate, todayISO } from '../lib/format'
 import { fmtQty, type PantryItem } from '../lib/types'
 import { Card, Empty, Loading, PageHeader, useAsync, useDebounce, useToast } from '../components/ui'
 import { PantryModal, ScanModal } from '../components/forms'
+import { Icon } from '../components/icons'
+import { announceChange, useOnChange } from '../components/Layout'
 
 type Facets = { locations: string[]; categories: string[]; synced_at: string; total: number; low: number; expiring: number }
 
@@ -22,7 +24,8 @@ export default function Pantry() {
   const { data: facets, reload: reloadFacets } = useAsync(() => api.get<Facets>(`${V1}/pantry/facets`), [])
   const [modal, setModal] = useState<{ kind: 'add' } | { kind: 'edit'; item: PantryItem } | { kind: 'scan' } | null>(() => sp.get('scan') ? { kind: 'scan' } : null)
   const [syncing, setSyncing] = useState(false)
-  const refresh = () => { reload(); reloadFacets() }
+  const refresh = () => announceChange()
+  useOnChange(() => { reload(); reloadFacets() })
   const adjust = async (p: PantryItem, delta: number) => {
     try { await api.post(`${V1}/pantry/${p.id}/adjust`, { delta }); refresh() } catch (e) { toast((e as Error).message, 'err') }
   }
@@ -37,14 +40,14 @@ export default function Pantry() {
   return (
     <>
       <PageHeader title="Pantry" sub={facets ? `${facets.total} items · ${facets.low} low · ${facets.expiring} expiring` : ''}
-        actions={<>{settings?.inventory_configured && <button className="btn" onClick={sync} disabled={syncing} title={facets?.synced_at ? `Last synced ${ago(facets.synced_at)}` : 'Never synced'}>{syncing ? 'Syncing…' : '⟳ Sync Inventory'}</button>}<button className="btn" onClick={() => setModal({ kind: 'scan' })}>▦ Scan</button><button className="btn primary" onClick={() => setModal({ kind: 'add' })}>+ Add</button></>} />
+        actions={<>{settings?.inventory_configured && <button type="button" className="btn" onClick={sync} disabled={syncing} title={facets?.synced_at ? `Last synced ${ago(facets.synced_at)}` : 'Never synced'}><Icon name="refresh" size={15} />{syncing ? 'Syncing…' : 'Sync Inventory'}</button>}<button type="button" className="btn" onClick={() => setModal({ kind: 'scan' })}><Icon name="scan" size={15} />Scan</button><button type="button" className="btn primary" onClick={() => setModal({ kind: 'add' })}><Icon name="plus" size={15} />Add</button></>} />
       <div className="toolbar">
-        <div className="search"><span className="ico">⌕</span><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search the pantry…" /></div>
-        <button className={`chip ${low ? 'active' : ''}`} onClick={() => setParam('low', low ? '' : '1')}>Running low</button>
-        <button className={`chip ${expiring ? 'active' : ''}`} onClick={() => setParam('expiring', expiring ? '' : '1')}>Use soon</button>
+        <div className="search"><Icon name="search" size={15} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search the pantry…" /></div>
+        <button type="button" className={`chip ${low ? 'active' : ''}`} onClick={() => setParam('low', low ? '' : '1')}><Icon name="alert" size={14} />Running low{facets?.low ? <span className="n">{facets.low}</span> : null}</button>
+        <button type="button" className={`chip ${expiring ? 'active' : ''}`} onClick={() => setParam('expiring', expiring ? '' : '1')}><Icon name="clock" size={14} />Use soon{facets?.expiring ? <span className="n">{facets.expiring}</span> : null}</button>
       </div>
-      {facets && facets.locations.length > 1 && <div className="filters"><button className={`chip ${!loc ? 'active' : ''}`} onClick={() => setParam('location', '')}>Everywhere</button>{facets.locations.map(l => <button key={l} className={`chip ${loc === l ? 'active' : ''}`} onClick={() => setParam('location', l)}>{l}</button>)}</div>}
-      {loading && !data ? <Loading /> : !data || data.length === 0 ? <Card><Empty title={q || low || expiring || loc ? 'Nothing matches' : 'The pantry is empty'}>{!q && !low && !expiring && !loc && (settings?.inventory_configured ? `Tag items “${settings.inventory_tag}” in Pocket Inventory and press Sync, scan a barcode, or add by hand.` : 'Scan a barcode or add items by hand. Connect Pocket Inventory under Settings to share the pantry with the rest of the house.')}</Empty></Card> : (
+      {facets && facets.locations.length > 1 && <div className="filters"><button type="button" className={`chip ${!loc ? 'active' : ''}`} onClick={() => setParam('location', '')}>Everywhere</button>{facets.locations.map(l => <button type="button" key={l} className={`chip ${loc === l ? 'active' : ''}`} onClick={() => setParam('location', l)}>{l}</button>)}</div>}
+      {loading && !data ? <Loading /> : !data || data.length === 0 ? <Card><Empty icon="basket" title={q || low || expiring || loc ? 'Nothing matches' : 'The pantry is empty'}>{!q && !low && !expiring && !loc && (settings?.inventory_configured ? `Tag items “${settings.inventory_tag}” in Pocket Inventory and press Sync, scan a barcode, or add by hand.` : 'Scan a barcode or add items by hand. Connect Pocket Inventory under Settings to share the pantry with the rest of the house.')}</Empty></Card> : (
         <Card flush>
           <div style={{ padding: '8px 14px' }}>
             {Object.keys(byLoc).sort().map(l => (
@@ -56,8 +59,7 @@ export default function Pantry() {
                       <div className="t">{p.name}{p.inventory_id && <span className="src inv" title={`Pocket Inventory #${p.inventory_id}`}>inv</span>}{p.expiry_date && <span className={`expiry ${p.expiry_date < today ? 'past' : ''}`}>{p.expiry_date < today ? 'expired' : `by ${fmtDate(p.expiry_date, false)}`}</span>}</div>
                       <div className="s">{[p.brand, p.category, p.min_quantity > 0 ? `min ${fmtQty(p.min_quantity, p.unit)}` : '', p.notes].filter(Boolean).join(' · ')}</div>
                     </div>
-                    <span className="qty"><button onClick={() => adjust(p, -step(p))} aria-label="Less">−</button><span>{p.quantity > 0 ? fmtQty(p.quantity, p.unit) : `0${p.unit && p.unit !== 'pcs' ? ' ' + p.unit : ''}`}</span><button onClick={() => adjust(p, step(p))} aria-label="More">+</button></span>
-                    <span />
+                    <span className="qty"><button type="button" onClick={() => adjust(p, -step(p))} aria-label="Less"><Icon name="minus" size={14} /></button><span>{p.quantity > 0 ? fmtQty(p.quantity, p.unit) : `0${p.unit && p.unit !== 'pcs' ? ' ' + p.unit : ''}`}</span><button type="button" onClick={() => adjust(p, step(p))} aria-label="More"><Icon name="plus" size={14} /></button></span>
                   </div>
                 ))}
               </div>

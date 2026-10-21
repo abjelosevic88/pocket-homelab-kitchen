@@ -64,9 +64,6 @@ export interface LookupResult { barcode: string; source: 'pantry' | 'inventory' 
 export interface SplitGroup { id: number; name: string; currency: string; archived: boolean; members: { id: number; name: string; user_id: number | null }[] }
 export interface Habit { id: number; name: string; color: string; end_date: string | null }
 
-export const SLOT_ICON: Record<string, string> = { breakfast: '🌅', lunch: '☀️', dinner: '🌙', snack: '🍎' }
-export const COURSE_ICON: Record<string, string> = { breakfast: '🥞', lunch: '🥗', dinner: '🍲', dessert: '🍰', snack: '🍿', side: '🥔', drink: '🥤', sauce: '🫙', other: '🍽' }
-export const AISLE_ICON: Record<string, string> = { produce: '🥬', dairy: '🧀', meat: '🥩', fish: '🐟', bakery: '🍞', pantry: '🥫', frozen: '🧊', drinks: '🧃', spices: '🧂', household: '🧻', other: '🛒' }
 export const cap = (s: string) => s ? s[0].toUpperCase() + s.slice(1).replace(/_/g, ' ') : ''
 /** "1.5 kg", "2", "to taste" */
 export function fmtQty(qty: number, unit: string): string {
