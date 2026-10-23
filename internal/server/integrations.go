@@ -47,8 +47,8 @@ func (s *Server) publicSettings(ctx context.Context, u *store.User, st store.Set
 	splitMode, splitVia, splitDetail := s.connStatus(ctx, u, st, appSplit)
 	habitsMode, habitsVia, habitsDetail := s.connStatus(ctx, u, st, appHabits)
 	return map[string]any{
-		"core_configured": s.core.Configured(),
-		"inventory_mode":  invMode, "inventory_via": invVia, "inventory_detail": invDetail,
+		"core_configured": s.core.Configured(), "core_registered": s.coreStatus()["registered"],
+		"inventory_mode": invMode, "inventory_via": invVia, "inventory_detail": invDetail,
 		"split_mode": splitMode, "split_via": splitVia, "split_detail": splitDetail,
 		"habits_mode": habitsMode, "habits_via": habitsVia, "habits_detail": habitsDetail,
 		"title": st.Title, "home_currency": st.HomeCurrency, "date_format": st.DateFormat, "time_format": st.TimeFormat, "week_start": st.WeekStart, "default_servings": st.DefaultServings,

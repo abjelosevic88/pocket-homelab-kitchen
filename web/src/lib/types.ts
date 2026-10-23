@@ -7,6 +7,8 @@ export type ConnVia = '' | 'core' | 'direct'
 
 export interface Settings {
   core_configured: boolean
+  /** false while Pocket Core is set but this app is not registered with it */
+  core_registered?: boolean
   inventory_mode: ConnMode; inventory_via: ConnVia; inventory_detail: string
   split_mode: ConnMode; split_via: ConnVia; split_detail: string
   habits_mode: ConnMode; habits_via: ConnVia; habits_detail: string
