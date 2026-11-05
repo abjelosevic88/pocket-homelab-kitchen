@@ -465,7 +465,7 @@ func TestManifestDeclaresLinks(t *testing.T) {
 		got = append(got, u.App+" "+strings.Join(u.Scopes, ","))
 	}
 	want(t, "uses", got, "inventory items:read,items:write,items:adjust", "split groups:read,expenses:write", "habits habits:read,entries:write")
-	if len(linkOffers) != 1 || linkOffers[0].Scope != "cooklog:read" {
+	if len(linkOffers) != 3 || linkOffers[0].Scope != "cooklog:read" || linkOffers[1].Scope != "recipes:read" || linkOffers[2].Scope != "plan:read" {
 		t.Fatalf("offers %v", linkOffers)
 	}
 }

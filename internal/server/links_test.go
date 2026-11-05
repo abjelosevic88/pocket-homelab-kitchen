@@ -18,7 +18,7 @@ import (
 // cooklog:read routes (and /auth/me) open, only Bob's cooks visible.
 func TestCoreLinkCooklogRead(t *testing.T) {
 	// pcx token → scope; all act for Bob, from Pocket Day
-	links := map[string]string{"pcx_day_bob": "cooklog:read", "pcx_other_bob": "something:else"}
+	links := map[string]string{"pcx_day_bob": "cooklog:read", "pcx_other_bob": "something:else", "pcx_nutrition_bob": "recipes:read plan:read"}
 	coreSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path != "/api/v1/auth/introspect" {
@@ -88,6 +88,24 @@ func TestCoreLinkCooklogRead(t *testing.T) {
 	} {
 		if code, _ := k.call("pcx_day_bob", c.m, c.p, map[string]any{}); code != 403 {
 			t.Errorf("%s %s with a link token: %d, want 403", c.m, c.p, code)
+		}
+	}
+	// Pocket Nutrition reads Bob's recipes and plan, never Alice's, and changes nothing
+	if code, out := k.call("pcx_nutrition_bob", "GET", "/api/v1/recipes", nil); code != 200 || !strings.Contains(fmt.Sprint(out), "Bob's pancakes") || strings.Contains(fmt.Sprint(out), "Alice") {
+		t.Fatalf("linked recipes %d %v", code, out)
+	}
+	if code, _ := k.call("pcx_nutrition_bob", "GET", fmt.Sprintf("/api/v1/recipes/%d", idOf(brc)), nil); code != 200 {
+		t.Fatalf("linked recipe: %d", code)
+	}
+	if code, _ := k.call("pcx_nutrition_bob", "GET", fmt.Sprintf("/api/v1/recipes/%d", idOf(arc)), nil); code != 404 {
+		t.Fatalf("alice's recipe through bob's link: %d", code)
+	}
+	if code, _ := k.call("pcx_nutrition_bob", "GET", "/api/v1/plan", nil); code != 200 {
+		t.Fatalf("linked plan: %d", code)
+	}
+	for _, c := range []struct{ m, p string }{{"POST", "/api/v1/recipes"}, {"PUT", fmt.Sprintf("/api/v1/recipes/%d", idOf(brc))}, {"POST", fmt.Sprintf("/api/v1/recipes/%d/cook", idOf(brc))}, {"POST", "/api/v1/plan"}, {"GET", "/api/v1/cooklog"}} {
+		if code, _ := k.call("pcx_nutrition_bob", c.m, c.p, map[string]any{}); code != 403 {
+			t.Errorf("%s %s with recipes:read plan:read: %d, want 403", c.m, c.p, code)
 		}
 	}
 	if code, _ := k.call("pcx_unknown", "GET", "/api/v1/cooklog", nil); code != 401 {

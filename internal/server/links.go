@@ -12,12 +12,14 @@ import (
 )
 
 // Pocket Core app links (docs/links.md in pocket-homelab-core), Kitchen as
-// the target: another Pocket app the person allowed in Core (Pocket Day) may
+// the target: another Pocket app the person allowed in Core (Pocket Day, Pocket Nutrition) may
 // read here for them with a pcx_ token, only within these scopes. Every route
 // not listed in linkRoutes stays closed to it (403).
 
 var linkOffers = []core.Offer{
 	{Scope: "cooklog:read", Name: "See what you cooked", Description: "Read your cook log (what you cooked and when), for your journal."},
+	{Scope: "recipes:read", Name: "See your recipes", Description: "Read your recipes with their ingredients and nutrition per serving, so a food diary can log one you cooked. Nothing can be changed with it."},
+	{Scope: "plan:read", Name: "See your meal plan", Description: "Read the meals you planned for each day, so a food diary can show them and log one in a tap. Nothing can be changed with it."},
 }
 
 type linkRoute struct {
@@ -29,6 +31,9 @@ type linkRoute struct {
 var linkRoutes = []linkRoute{
 	{"GET", regexp.MustCompile(`^/api/v1/auth/me$`), ""},
 	{"GET", regexp.MustCompile(`^/api/v1/cooklog$`), "cooklog:read"},
+	{"GET", regexp.MustCompile(`^/api/v1/recipes$`), "recipes:read"},
+	{"GET", regexp.MustCompile(`^/api/v1/recipes/\d+$`), "recipes:read"},
+	{"GET", regexp.MustCompile(`^/api/v1/plan$`), "plan:read"},
 }
 
 var errLinkScope = errors.New("outside the link's scope")

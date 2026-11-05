@@ -92,7 +92,7 @@ The status line under the switch says whether the connection works and why not; 
 - **Notifications** — an Apprise gateway endpoint, an ntfy topic URL or any JSON webhook; pick the hour.
 - **Open Food Facts** — on by default, no account needed.
 
-The other way round, Kitchen **offers** `cooklog:read` (“See what you cooked”) so Pocket Day can put what you cooked into your journal through Core, without a Kitchen token.
+The other way round, Kitchen **offers** `cooklog:read` (“See what you cooked”) so Pocket Day can put what you cooked into your journal, and `recipes:read` and `plan:read` so Pocket Nutrition can log a recipe by the serving and show the meals you planned — all through Core, without a Kitchen token.
 
 ## Documentation
 

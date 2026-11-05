@@ -12,6 +12,8 @@ Another Pocket app may call Kitchen for a person with a `pcx_` token Pocket Core
 |---|---|---|
 | (any link) | | GET `/auth/me` |
 | `cooklog:read` | See what you cooked | GET `/cooklog` |
+| `recipes:read` | See your recipes | GET `/recipes`, `/recipes/{id}` |
+| `plan:read` | See your meal plan | GET `/plan` |
 
 Every other route answers `403` to a link token, and it only ever sees the person's own cooks. Pocket Day uses it for the journal.
 
