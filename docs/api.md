@@ -35,6 +35,7 @@ Kitchen reports how each person connects to Inventory, Split and Habits (the `*_
 | GET | `/home` | everything the home page shows |
 | GET | `/search?q=` | recipes + pantry |
 | GET | `/backup` · `/export.json` · POST `/import` | SQLite copy of the whole box (admin only); JSON export / merge-import of your own kitchen |
+| GET | `/pocket/portable` | Pocket Move can copy your kitchen out and bring it in: the export (link scope `move:export`) and the import (`move:import`, the export JSON as the body; a second run of the same file adds nothing) |
 
 ## Recipes
 | Method | Path | Notes |

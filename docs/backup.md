@@ -26,4 +26,4 @@ Then back up `files/` with your usual tool (restic, Backrest, rsync). Exclude `p
 
 ## JSON export
 
-Settings → Backup & data exports everything but users and tokens as one JSON file; importing it merges (recipes by title, pantry items and lists by name).
+Settings → Backup & data exports everything but users and tokens as one JSON file; importing it merges (recipes by title, pantry items and lists by name; list items, plan entries, cooks and purchases already there are skipped, so importing the same file twice adds nothing).

@@ -737,7 +737,9 @@ func (s *Server) handleExportJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleImportJSON merges an export into the caller's own kitchen: recipes by
-// title, pantry by name, lists by name; plan entries and cooks are added.
+// title, pantry by name, lists by name; list items, plan entries, cooks and
+// purchases are added unless the same one is already there, so importing the
+// same file twice adds nothing.
 func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 	var doc exportDoc
 	if err := decode(r, &doc); err != nil {
@@ -749,6 +751,8 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 	counts := map[string]int{}
 	recipeIDs := map[int64]int64{}
 	existing, _ := s.store.ListRecipes(ctx, actorID(ctx), store.RecipeFilter{})
+	archived, _ := s.store.ListRecipes(ctx, actorID(ctx), store.RecipeFilter{Archived: true})
+	existing = append(existing, archived...)
 	byTitle := map[string]int64{}
 	for _, rc := range existing {
 		byTitle[strings.ToLower(rc.Title)] = rc.ID
@@ -800,11 +804,22 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	itemKey := func(lid int64, it store.ListItem) string {
+		return fmt.Sprintf("%d|%s|%s", lid, strings.ToLower(strings.TrimSpace(it.Name)), strings.ToLower(it.Unit))
+	}
+	haveItem := map[string]bool{}
+	for _, lid := range listIDs {
+		items, _ := s.store.ListItems(ctx, actorID(ctx), lid)
+		for _, it := range items {
+			haveItem[itemKey(lid, it)] = true
+		}
+	}
 	for _, it := range doc.Items {
 		lid, ok := listIDs[it.ListID]
-		if !ok {
+		if !ok || haveItem[itemKey(lid, it)] {
 			continue
 		}
+		haveItem[itemKey(lid, it)] = true
 		it.ID, it.ListID, it.PlanID, it.PantryID, it.CreatedBy = 0, lid, nil, nil, nil
 		if uid > 0 {
 			it.CreatedBy = &uid
@@ -820,7 +835,19 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 			counts["items"]++
 		}
 	}
+	planKey := func(p store.PlanEntry) string {
+		return p.Date + "|" + p.Slot + "|" + strings.ToLower(strings.TrimSpace(p.DisplayTitle()))
+	}
+	havePlan := map[string]bool{}
+	plan, _ := s.store.ListPlan(ctx, actorID(ctx), "0000-01-01", "9999-12-31")
+	for _, p := range plan {
+		havePlan[planKey(p)] = true
+	}
 	for _, p := range doc.Plan {
+		if havePlan[planKey(p)] {
+			continue
+		}
+		havePlan[planKey(p)] = true
 		p.ID, p.CookID, p.CreatedBy = 0, nil, nil
 		if uid > 0 {
 			p.CreatedBy = &uid
@@ -842,7 +869,19 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 			counts["plan"]++
 		}
 	}
+	cookKey := func(c store.Cook) string {
+		return fmt.Sprintf("%s|%s|%d|%d|%s", c.Date, strings.ToLower(strings.TrimSpace(c.RecipeTitle)), c.Servings, c.Rating, c.Notes)
+	}
+	haveCook := map[string]bool{}
+	cooks, _ := s.store.ListCooks(ctx, actorID(ctx), 0, 1000000)
+	for _, c := range cooks {
+		haveCook[cookKey(c)] = true
+	}
 	for _, c := range doc.Cooks {
+		if haveCook[cookKey(c)] {
+			continue
+		}
+		haveCook[cookKey(c)] = true
 		c.ID, c.PlanID = 0, nil
 		if c.RecipeID != nil {
 			if nid, ok := recipeIDs[*c.RecipeID]; ok {
@@ -858,7 +897,19 @@ func (s *Server) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	purchaseKey := func(p store.Purchase) string {
+		return fmt.Sprintf("%s|%s|%s|%d|%s|%d", p.Date, strings.ToLower(p.ListName), strings.ToLower(p.Store), p.Amount, p.Currency, p.Items)
+	}
+	havePurchase := map[string]bool{}
+	purchases, _ := s.store.ListPurchases(ctx, actorID(ctx), 1000000)
+	for _, p := range purchases {
+		havePurchase[purchaseKey(p)] = true
+	}
 	for _, p := range doc.Purchases {
+		if havePurchase[purchaseKey(p)] {
+			continue
+		}
+		havePurchase[purchaseKey(p)] = true
 		p.ID, p.ListID = 0, nil
 		if err := s.store.CreatePurchase(ctx, actorID(ctx), &p); err == nil {
 			counts["purchases"]++

@@ -399,6 +399,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/backup", s.handleBackup)
 			r.Get("/export.json", s.handleExportJSON)
 			r.Post("/import", s.handleImportJSON)
+			r.Get(strings.TrimPrefix(core.PortablePath, "/api/v1"), portable.Handler())
 		})
 	})
 
@@ -540,6 +541,7 @@ func (s *Server) registerWithCore(ctx context.Context) error {
 		Publishes: []string{"kitchen.cooked", "kitchen.checkout"},
 		Offers:    linkOffers,
 		Uses:      linkUses(),
+		Portable:  portable,
 	}
 	if s.cfg.BaseURL != "" {
 		// ask Core for a relying-party client so "Sign in with Pocket Core" needs no configuration
